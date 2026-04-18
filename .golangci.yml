@@ -47,6 +47,8 @@ linters:
     depguard:
       rules:
         # Domain core packages must stay free of frameworks.
+        # Cryptographic primitives (keccak for EIP-55 checksums, future
+        # hashing needs) are allowed as pure-compute building blocks.
         domain-purity:
           list-mode: strict
           files:
@@ -58,6 +60,7 @@ linters:
             - "!**/fake/**"
           allow:
             - "$gostd"
+            - "golang.org/x/crypto/sha3"
             - "github.com/seokheejang/chain-sync-watch/internal/chain"
             - "github.com/seokheejang/chain-sync-watch/internal/source"
             - "github.com/seokheejang/chain-sync-watch/internal/verification"

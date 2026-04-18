@@ -50,7 +50,7 @@ examples/
 | Phase | 제목 | 상태 | 의존 Phase | 문서 |
 |---|---|---|---|---|
 | 0 | Foundations | ✅ Done | — | [phase-00-foundations.md](./phase-00-foundations.md) |
-| 1 | `chain/` 도메인 (ChainID slug/name 매핑) | ⬜ Not started | 0 | [phase-01-chain-domain.md](./phase-01-chain-domain.md) |
+| 1 | `chain/` 도메인 (ChainID slug/name 매핑) | ✅ Done | 0 | [phase-01-chain-domain.md](./phase-01-chain-domain.md) |
 | 2 | `source/` 포트 (필드 단위 Capability, 코어 추상) | ⬜ Not started | 1 | [phase-02-source-ports.md](./phase-02-source-ports.md) |
 | 3 | 번들 어댑터 (`rpc`, `blockscout`, `etherscan`) + 커스텀 예시 | ⬜ Not started | 2 | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
 | 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ⬜ Not started | 1, 2 | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
