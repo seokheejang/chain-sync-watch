@@ -6,6 +6,25 @@ Phase 2에서 정의한 `Source` 포트의 **독립 패키지 번들 구현체**
 
 **사용자 정의 indexer(예: 내부 GraphQL)** 는 **이 Phase가 아니라** `examples/custom-graphql-adapter/`에서 패턴만 제공하고, 실사용은 사용자가 자기 repo에서 구현.
 
+## ⚠️ 2026-04-18 업데이트 — Etherscan 후순위 + Routescan 추가
+
+외부 API 조사(`docs/research/external-api-coverage.md`) 결과 초안 구성 변경:
+
+- **Etherscan V2 Free는 Optimism 미지원** — Free tier는 ETH/Polygon/Arbitrum만, Optimism·Base는 paid(Standard $199/mo). **MVP 기본 bundle에서 제외**, opt-in으로 후순위 이동.
+- **Routescan 추가** — Etherscan-호환 API를 Optimism free로 keyless 제공. 5 req/s, 100k/day. `internal/ethscan/` 공유 client 그대로 재사용 가능.
+- **RPC는 사용자 자체 full-archive 노드** 사용 예정 (공개 RPC는 archive 미지원 or debug_* 차단).
+- **Capability 확장 필요**: ERC-20 per-address (balance, holdings), internal_tx (debug_trace 대체) — Phase 2C로 분리 후 본 Phase 시작.
+
+### 수정된 어댑터 라인업 (우선순위 순)
+
+| 어댑터 | 기본 활성화 | 키 필요 | 비고 |
+|---|:---:|:---:|---|
+| `adapters/rpc/` | ✅ | ❌ | 사용자 archive 노드 |
+| `adapters/blockscout/` | ✅ | ❌ | native REST v2 + proxy fallback |
+| `adapters/routescan/` | ✅ | ❌ | Etherscan-호환, Optimism 무료 |
+| `adapters/etherscan/` | ❌ | ✅ | **후순위** — Etherscan-지원 체인(ETH 등)에서만 가치 |
+| `adapters/alchemy/` | ❌ | ✅ | post-MVP opt-in (debug_*, enhanced APIs) |
+
 ## 산출물 (DoD)
 
 ### 번들 어댑터 (각자 독립 패키지)

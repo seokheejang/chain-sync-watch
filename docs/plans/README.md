@@ -45,6 +45,56 @@ examples/
 | `AddressAtBlock` | 과거 블록 시점 address (archive RPC 필요) | ExactMatch, Critical |
 | `Snapshot` | 체인 누적량 (total addresses, total txs, erc20 token count) | 자동 판정 없음, 대시보드 관찰용 |
 
+## 🔖 현재 작업 시점 (Checkpoint)
+
+**최종 업데이트**: 2026-04-18
+**현재 단계**: **Phase 3 시작 전 — 외부 API 조사 진행 중**
+
+### 완료 (committed)
+
+- Phase 0 Foundations — commit `ac4b50e` + `4eab3cd`
+- Phase 1 `chain/` 도메인 (값객체 5종) — commit `498c09b`
+- Phase 2 `source/` 포트 + Fake — commit `a8b9b20` + `cfd7549`
+- Ralph 셀프 리뷰 + 테스트 fixture 합성화 — commit `725b063` + `f939232`
+- CLAUDE.md rule 6 (.env secret 비재출력 규칙) — commit `6d27c4c`
+
+### 진행 중 (uncommitted, WIP)
+
+- `docs/research/external-api-coverage.md` (413줄, staged) — 외부 API 커버리지 체계 조사 문서
+- Phase 3 시작 대기 중
+
+### 다음 세션 재개 절차
+
+1. [docs/research/external-api-coverage.md](../research/external-api-coverage.md) **전문 정독** (이번 세션 조사 결과 집대성)
+2. **사용자가 자체 full-archive RPC URL 제공** → `.env`의 `CSW_ADAPTERS__RPC__ENDPOINTS__10`에 세팅
+3. 위 문서의 **"Open Questions 우선순위 A"** 4항목 curl로 최종 확인:
+   - Routescan `stats` 모듈의 chain-wide total_addresses/total_txs action 존재 여부
+   - Routescan `balancehistory` (archive) Optimism free 동작 확인
+   - Blockscout v2 `address/internal-transactions` 엔드포인트 공식 존재 여부
+   - Blockscout rate limit 실제 window + `bypass-429-option: temporary_token` 취득 절차
+4. 조사 결과 반영해 research doc 업데이트 + 커밋
+5. **Phase 2C** 진행: Capability 4개 추가 (ERC-20 per-address 2개, internal_tx 2개) + 대응 Query/Result + fake 확장
+6. **Phase 3A** 시작: `adapters/internal/httpx/` HTTP 공용 base (TDD Red → Green)
+
+### 확정 결정
+
+- **RPC 기본 소스**: 사용자 자체 full-archive 노드 (다음 세션에 URL 전달 예정) — 외부 공개 RPC는 archive 미지원 or debug_* 차단
+- **External API 우선순위** (검증 도구 관점):
+  1. **Blockscout** (keyless, native REST v2, 풍부한 필드, chain stats 유일 공급자)
+  2. **Routescan** (keyless, Etherscan-compat, Optimism free 커버, internal_tx + ERC-20 holdings 강력)
+  3. **Etherscan V2** — **후순위 (opt-in only)**. Free가 Optimism 미커버·paid 필요. Ethereum-mainnet 확장 시점에만 활성화 가치 있음.
+  4. Alchemy / Covalent / Moralis — post-MVP opt-in
+- **기본 OSS 공개 구성**: User-RPC (archive) + Blockscout + Routescan = **keyless 3-way**
+- **Phase 3 어댑터 순서**: `httpx` → `rpc` → `internal/ethscan` → `blockscout` → `routescan` → `etherscan` (후순위) → docs/examples
+
+### Open Items — 코드 작업 전 확정 필요
+
+- [ ] Phase 2C (Capability 확장)를 Phase 3 *전*에 완료할지, Phase 3과 병행할지
+- [ ] Routescan의 chain stats 실제 action 이름·커버리지 (위 Open Questions A)
+- [ ] Bypass-429 token으로 Blockscout rate limit 얼마나 올라가는지
+
+---
+
 ## 진행도
 
 | Phase | 제목 | 상태 | 의존 Phase | 문서 |
@@ -52,7 +102,8 @@ examples/
 | 0 | Foundations | ✅ Done | — | [phase-00-foundations.md](./phase-00-foundations.md) |
 | 1 | `chain/` 도메인 (ChainID slug/name 매핑) | ✅ Done | 0 | [phase-01-chain-domain.md](./phase-01-chain-domain.md) |
 | 2 | `source/` 포트 (필드 단위 Capability, 코어 추상) | ✅ Done | 1 | [phase-02-source-ports.md](./phase-02-source-ports.md) |
-| 3 | 번들 어댑터 (`rpc`, `blockscout`, `etherscan`) + 커스텀 예시 | ⬜ Not started | 2 | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 2C | Capability 확장 (ERC-20 per-address + internal_tx) | 🟡 Proposed | 2 | 문서화 예정 (현재는 research doc에만 기술) |
+| 3 | 번들 어댑터 (`rpc`, `blockscout`, **`routescan`**, `etherscan` 후순위) + 커스텀 예시 | ⛔ Blocked (외부 API 조사 중) | 2 / 2C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
 | 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ⬜ Not started | 1, 2 | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
 | 5 | Application (use case) | ⬜ Not started | 2, 4 | [phase-05-application.md](./phase-05-application.md) |
 | 6 | Persistence (Postgres + gorm) | ⬜ Not started | 4, 5 | [phase-06-persistence.md](./phase-06-persistence.md) |
@@ -65,9 +116,9 @@ examples/
 ### 상태 아이콘
 
 - ⬜ Not started
-- 🟡 In progress
+- 🟡 In progress / Proposed
 - ✅ Done
-- ⛔ Blocked
+- ⛔ Blocked (외부 입력/조사 대기)
 
 ## 원칙
 

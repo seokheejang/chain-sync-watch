@@ -1,0 +1,428 @@
+# External API Coverage — Research & Resume Notes
+
+데이터 소스별 실제 커버리지·엔드포인트 조사. Phase 3 어댑터 구현 전에 완료해야 할 검증 작업.
+
+**RPC는 사용자가 보유한 full-archive 노드 사용 예정** — 이 문서는 **외부 API 대안**에 집중.
+
+---
+
+## 배경 — 왜 이 문서가 필요한가
+
+### 발견된 제약
+- **Etherscan V2 Free tier는 Optimism(10)·Base(8453) 미지원**. "Free API access is not supported for this chain" 명시적 거부.
+  - Free 지원: Ethereum(1), Polygon(137), Arbitrum(42161) 등
+  - 유료 Standard+($199/mo) 티어에서만 Optimism 커버
+- **공개 RPC(publicnode, mainnet.optimism.io) 대부분 `debug_*` whitelist 차단**
+- **publicnode는 archive 미지원** ("no historical RPC"), mainnet.optimism.io는 archive 지원 확인
+
+### 결론
+- Optimism MVP는 **Etherscan 없이 keyless 3-way** 달성 필요
+- **Routescan**이 Etherscan-호환 API를 Optimism free로 제공 → 핵심 대안
+- 사용자 요구 지표(ERC-20 per-address, internal tx 등)를 외부 API가 어떻게 커버하는지 체계적 정리 필요
+
+---
+
+## 대상 지표 — "우리가 비교하고 싶은 것"
+
+Phase 2 기존 Capability + 사용자 요구 추가 반영:
+
+| 지표 카테고리 | 지표 | Phase 2 있음? |
+|---|---|:---:|
+| Block 불변 | hash, parent_hash, timestamp, tx_count, gas_used, state/receipts/transactions_root, miner | ✅ |
+| Address latest | balance, nonce, tx_count | ✅ |
+| Address at block | balance_at_block, nonce_at_block (archive 필요) | ✅ |
+| Snapshot | total_addresses, total_txs, erc20_token_count, total_contracts | ✅ |
+| **Address ERC-20 (신규)** | **ERC-20 balance of specific token**, **ERC-20 holdings (전체 토큰 목록)** | ❌ 추가 필요 |
+| **Trace (신규)** | **internal tx by block**, **internal tx by tx hash** (debug_trace 대체) | ❌ 추가 필요 |
+
+---
+
+## 실측 커버리지 매트릭스
+
+| 지표 | User RPC (archive) | Blockscout v2 REST | Routescan (Etherscan-compat) | Etherscan V2 (paid req'd for OP) | Alchemy (free tier) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| block.hash / parent_hash / timestamp / tx_count | ✅ eth_getBlockByNumber | ✅ `/api/v2/blocks/{n}` | ✅ proxy module | ✅ proxy | ✅ |
+| block.state_root / receipts_root / transactions_root | ✅ | 🔁 proxy module (REST v2엔 없음) | 🔁 proxy | ✅ | ✅ |
+| block.miner / gas_used | ✅ | ✅ REST v2 | ✅ | ✅ | ✅ |
+| address.balance_at_latest | ✅ eth_getBalance | ✅ `/addresses/{addr}.coin_balance` | ✅ `account/balance` | ✅ (ETH 체인) | ✅ |
+| address.nonce_at_latest | ✅ eth_getTransactionCount | ✅ REST v2 | ✅ proxy | ✅ | ✅ |
+| address.balance_at_block | ✅ (archive) | 🔁 proxy | 🔁 proxy | ⚠️ PRO | ✅ |
+| address.nonce_at_block | ✅ (archive) | 🔁 proxy | 🔁 proxy | ✅ | ✅ |
+| snapshot.total_addresses | ❌ | ✅ `/stats.total_addresses` | ⚠️ 제한적 | ⚠️ | ⚠️ |
+| snapshot.total_txs | ❌ | ✅ `/stats.total_transactions` | ⚠️ | ⚠️ | ⚠️ |
+| snapshot.total_blocks | ❌ | ✅ `/stats.total_blocks` | ⚠️ | ⚠️ | ⚠️ |
+| snapshot.erc20_token_count | ❌ | ✅ `/tokens?type=ERC-20` 페이징 | ⚠️ 확인 필요 | ⚠️ | ⚠️ |
+| **address.erc20_balance (특정 토큰)** | ✅ eth_call balanceOf | ✅ REST v2 `/token-balances` 필터 | ✅ `account/tokenbalance` | ✅ | ✅ |
+| **address.erc20_holdings (전체 목록)** | ⚠️ 복잡 (이벤트 스캔 필요) | ✅ `/addresses/{addr}/token-balances` | ✅ `account/addresstokenbalance` (이름·심볼·소수점 포함) | ✅ | ✅ |
+| **trace.internal_tx_by_tx** | ✅ debug_traceTransaction | ✅ `/transactions/{hash}/internal-transactions` | ✅ `account/txlistinternal` | ⚠️ | ✅ |
+| **trace.internal_tx_by_block** | ✅ debug_traceBlockByNumber | ⚠️ 확인 필요 | ✅ `account/txlistinternal` (블록 범위) | ⚠️ | ✅ |
+
+**범례**: ✅ 직접 지원 · 🔁 동일 소스 내 다른 엔드포인트로 보강 · ⚠️ 조건부/불확실 · ❌ 원천 불가
+
+---
+
+## 소스별 엔드포인트 레퍼런스
+
+### Blockscout v2 (keyless)
+
+배포 URL: `https://optimism.blockscout.com` (리다이렉트 → `https://explorer.optimism.io`)
+
+공식 문서:
+- https://docs.blockscout.com/devs/apis
+- https://docs.blockscout.com/devs/apis/rest (REST v2 — 권장)
+- https://docs.blockscout.com/devs/apis/rpc (Etherscan-호환 V1 스타일)
+- Swagger UI: https://optimism.blockscout.com/api-docs
+
+#### REST v2 주요 엔드포인트
+
+| 용도 | Method + Path | 응답 주요 필드 |
+|---|---|---|
+| 체인 통계 | `GET /api/v2/stats` | total_addresses, total_transactions, total_blocks, gas_used_today, average_block_time, coin_price |
+| 블록 상세 | `GET /api/v2/blocks/{number_or_hash}` | hash, parent_hash, timestamp, transactions_count, gas_used, miner, size, total_difficulty (state_root 등 roots 없음) |
+| 블록 목록 | `GET /api/v2/blocks?type=block` | items[], next_page_params |
+| 주소 상세 | `GET /api/v2/addresses/{addr}` | coin_balance, block_number_balance_updated_at, is_contract, has_tokens, has_logs, has_token_transfers, implementations, token (if contract) |
+| 주소의 **ERC-20 holdings** | `GET /api/v2/addresses/{addr}/token-balances` | Array: [{token, token_id, token_instance, value}] — 확인됨 248개 반환 |
+| 주소의 tx 목록 | `GET /api/v2/addresses/{addr}/transactions` | items[], next_page_params |
+| 주소의 internal tx | `GET /api/v2/addresses/{addr}/internal-transactions` | ⚠️ 확인 필요 (존재 여부) |
+| 트랜잭션 상세 | `GET /api/v2/transactions/{hash}` | hash, block_number, from, to, value, gas_used, status, method |
+| 트랜잭션의 internal tx | `GET /api/v2/transactions/{hash}/internal-transactions` | items[] — 트랜잭션별 internal call |
+| ERC-20 토큰 목록 | `GET /api/v2/tokens?type=ERC-20` | items[], next_page_params (페이징 total 확인 가능) |
+| 토큰 상세 | `GET /api/v2/tokens/{contract}` | name, symbol, total_supply, holders, type |
+| 토큰 홀더 | `GET /api/v2/tokens/{contract}/holders` | items[], next_page_params |
+
+#### Etherscan-compat proxy fallback
+
+`GET /api?module=proxy&action=<method>&<params>` — state_root 등 REST v2가 노출 안 하는 raw RPC 필드 조회용:
+- `action=eth_getBlockByNumber&tag=0x..&boolean=false` — full 블록 헤더 (all roots 포함)
+- `action=eth_getBalance&address=..&tag=0x..` — balance at block
+
+#### 관찰된 rate limit
+- Cloudflare 기반, `x-ratelimit-limit: 600` / `x-ratelimit-reset` 동적 (2~3h+)
+- `bypass-429-option: temporary_token` 제공 → 별도 토큰으로 상향 가능 (정확한 절차 확인 필요)
+
+---
+
+### Routescan (Etherscan-compat, keyless)
+
+배포 URL: `https://api.routescan.io/v2/network/mainnet/evm/{chainid}/etherscan/api`
+
+공식 문서:
+- https://routescan.io/documentation
+- https://routescan.io/documentation/api/etherscan-like/accounts
+
+#### 주요 엔드포인트 (쿼리 파라미터)
+
+| 용도 | Query |
+|---|---|
+| 최신 블록 번호 | `?module=proxy&action=eth_blockNumber` |
+| 블록 상세 | `?module=proxy&action=eth_getBlockByNumber&tag=0x..&boolean=false` |
+| balance | `?module=account&action=balance&address=..&tag=latest` |
+| balance at block | `?module=account&action=balancehistory&address=..&blockno=N` (확인 필요) |
+| 다수 balance | `?module=account&action=balancemulti&address=A,B,C&tag=latest` |
+| tx 목록 | `?module=account&action=txlist&address=..&startblock=..&endblock=..` |
+| **internal tx (by address)** | `?module=account&action=txlistinternal&address=..` |
+| **internal tx (by tx hash)** | `?module=account&action=txlistinternal&txhash=..` |
+| **internal tx (by block range)** | `?module=account&action=txlistinternal&startblock=..&endblock=..` |
+| **ERC-20 특정 토큰 balance** | `?module=account&action=tokenbalance&contractaddress=..&address=..&tag=latest` |
+| **ERC-20 holdings (전체 목록)** | `?module=account&action=addresstokenbalance&address=..&page=1&offset=100` — 확인됨 |
+| ERC-20 transfer 목록 | `?module=account&action=tokentx&address=..` |
+| ERC-721 transfer 목록 | `?module=account&action=tokennfttx&address=..` |
+| gas oracle | `?module=gastracker&action=gasoracle` |
+| ETH supply | `?module=stats&action=ethsupply` |
+| ??? total_addresses / total_txs | ⚠️ **Etherscan-compat엔 직접 매칭 없음** — `stats` 모듈 내 다른 action 존재 여부 조사 필요 |
+| 토큰 total supply | `?module=stats&action=tokensupply&contractaddress=..` |
+
+#### 관찰된 rate limit
+- 최신 기준 **5 calls/sec, 100,000/day** (Etherscan free가 Optimism 잘라낸 뒤 강화)
+- 과거엔 2 req/s, 10k/day 이었음
+- 키·가입 불필요
+
+#### 알려진 제약
+- **chain stats (total_addresses, total_transactions 등)**: Etherscan-compat 스키마엔 공식 action이 없음 → **조사 TODO**
+- 결론 가능성: "Routescan은 block/tx/account/토큰 지표는 강하지만 chain-wide cumulative stats는 약함"
+- 이 경우 **Blockscout**이 snapshot 카테고리의 유일한 공급자 (free)
+
+---
+
+### Etherscan V2 Multichain (API key 필요, Optimism은 paid)
+
+Base: `https://api.etherscan.io/v2/api`
+Auth: `&apikey=XXX` 쿼리 파라미터
+
+공식 문서:
+- https://docs.etherscan.io/etherscan-v2
+- https://docs.etherscan.io/support/rate-limits
+
+#### Free tier 커버
+- Ethereum(1), Polygon(137), Arbitrum(42161) 등 — **Optimism / Base 제외**
+- 5 req/s, 100k/day
+
+#### 지원 action은 Routescan과 거의 동일한 Etherscan-compat 스키마
+
+→ 우리 프로젝트 관점에서는 **Routescan의 "paid chains + 다른 chains" 판 쌍둥이**. 같은 어댑터 로직에 URL/키만 다름.
+
+→ **옵션 B의 `adapters/internal/ethscan/` 공통 client 재사용 완벽 적합**.
+
+---
+
+### Alchemy (API key 필요, 자유도 높음)
+
+공식 문서:
+- https://www.alchemy.com/pricing
+- https://docs.alchemy.com/reference/optimism-api-quickstart
+
+#### Free tier
+- **30M Compute Units / month** (CU) — 단순 RPC 요청 기준 약 1.8M/월 (~60k/day 평균)
+- Optimism, Base, Arbitrum, Polygon, Ethereum 모두 포함
+
+#### 고유 기능 (Enhanced APIs)
+- `alchemy_getTokenBalances(address, [contracts])` — 한 번에 여러 ERC-20 balance
+- `alchemy_getTokensForOwner(address)` — 보유 토큰 전체 메타데이터 포함
+- `alchemy_getAssetTransfers(params)` — tx history 필터링 강력
+- `debug_*` 전 라인업 — **debug_traceTransaction/Block 지원 확인** (paid tier에서)
+- `trace_*` (OpenEthereum-style) 일부 지원
+
+#### 상태
+- Phase 3에서 **opt-in adapter**로 구현 가치 있음
+- 사용자가 키 있으면 4-way 비교 또는 debug_trace 전용 소스로
+
+---
+
+### Covalent (Unified API, 키 필요, free 100k/month)
+
+공식 문서:
+- https://www.covalenthq.com/docs/api/
+- https://goldrush.dev/platform
+
+#### Free tier (goldrush.dev로 리브랜딩됨)
+- 100,000 req/month, 제한된 endpoint set
+
+#### 고유 기능
+- 100+ 체인 통합 unified response
+- `/v1/{chainid}/address/{addr}/balances_v2/` — 모든 토큰(ERC-20/721/1155) 한 번에
+- `/v1/{chainid}/block/{n}/` — 블록 상세
+- `/v1/{chainid}/address/{addr}/transactions_v3/` — tx history
+- 체인별 pricing·holders 포함
+
+#### 조사 TODO
+- Free tier에 Optimism 포함되는지 확인 (최근 정책 변경 가능)
+- 어떤 지표가 free tier에서 접근 가능한지 세부
+
+---
+
+### Moralis (키 필요, free 40k/day)
+
+공식 문서:
+- https://docs.moralis.io/
+
+#### Free tier
+- 40,000 req/day
+- Optimism 포함 지원
+
+#### 조사 TODO
+- Optimism 지원 정도 (전체 endpoint vs 제한)
+- debug_trace 지원 여부
+
+---
+
+### 기타 조사 대상 (우선순위 낮음)
+
+| 소스 | 특징 | 조사 필요성 |
+|---|---|---|
+| QuickNode | Marketplace + add-on APIs, free 10M req/month | 중간 |
+| BlockPI | 공개 RPC + API, free tier | 낮음 |
+| OnFinality | Substrate 중심, EVM도 일부 | 낮음 |
+| The Graph (subgraph) | GraphQL, 주문형 인덱싱 | Phase post-MVP |
+| Dune | SQL, 집계용 | 대시보드 관점만 |
+
+---
+
+## RPC (사용자 archive 노드)
+
+**사용자가 다음 세션에 URL 제공 예정.** 이 문서에선 다루지 않음.
+
+필수 요구:
+- Archive mode (eth_getBalance at any block)
+- `debug_*` 활성화 (debug_traceTransaction, debug_traceBlockByNumber)
+- WebSocket 가능하면 좋음 (실시간 streaming 확장 대비)
+
+---
+
+## Open Questions — 다음 세션 조사할 것
+
+### 우선순위 A (Phase 3 전 반드시)
+
+- [ ] **Routescan 체인 통계**: `total_addresses`, `total_transactions`, `total_blocks` 조회 가능한 action 존재하는지? Etherscan-compat 스키마에 `stats` 모듈 action 전체 목록 확인 필요
+- [ ] **Routescan `balancehistory` (archive)**: Optimism free tier에서 historical balance 조회 실제 동작하는지 (Etherscan free에선 PRO 전용)
+- [ ] **Blockscout `address/internal-transactions`**: REST v2에 이 엔드포인트 공식 존재 여부 (현재 미확인)
+- [ ] **Blockscout rate limit 정확 window**: 600 한도의 실제 창 (1h? 2h? rolling?) — 공식 문서 확인 or bypass-429 토큰 취득 절차
+
+### 우선순위 B (가능하면)
+
+- [ ] Covalent/goldrush Free tier에 Optimism 확실히 포함되는지
+- [ ] Alchemy Optimism free tier에서 debug_* 실제 동작 (일부 enhanced method는 paid)
+- [ ] Moralis Optimism 커버 정도
+- [ ] Bypass token 취득 후 Blockscout rate limit 어디까지 올라가는지
+
+### 우선순위 C (post-MVP)
+
+- [ ] Self-hosted Blockscout 구축 비용·난이도 평가
+- [ ] The Graph subgraph 자체 배포 검토 (커스텀 지표용)
+
+---
+
+## Phase 2 추가 필요 항목 (요약)
+
+본 조사 결과 Phase 2의 Capability/Query/Result에 다음 추가 필요:
+
+```go
+// === Capability 추가 ===
+
+// Per-address ERC-20
+CapERC20BalanceAtLatest   Capability = "address.erc20_balance_at_latest"
+CapERC20HoldingsAtLatest  Capability = "address.erc20_holdings_at_latest"
+
+// Internal transactions (debug_trace 대체 레이어)
+CapInternalTxByBlock Capability = "trace.internal_tx_by_block"
+CapInternalTxByTx    Capability = "trace.internal_tx_by_tx"
+```
+
+```go
+// === Query/Result 추가 ===
+
+type ERC20BalanceQuery struct {
+    Address      chain.Address
+    TokenAddress chain.Address
+}
+type ERC20BalanceResult struct {
+    Balance  *big.Int
+    Decimals uint8
+    SourceID SourceID
+    // ...metadata
+}
+
+type ERC20HoldingsQuery struct { Address chain.Address }
+type ERC20HoldingsResult struct {
+    Tokens   []TokenHolding
+    SourceID SourceID
+}
+type TokenHolding struct {
+    Contract chain.Address
+    Name     string
+    Symbol   string
+    Decimals uint8
+    Balance  *big.Int
+}
+
+type InternalTxByBlockQuery struct { Block chain.BlockNumber }
+type InternalTxByTxQuery    struct { TxHash chain.Hash32 }
+type InternalTxResult struct {
+    Traces   []InternalTx
+    SourceID SourceID
+}
+type InternalTx struct {
+    From, To chain.Address
+    Value    *big.Int
+    GasUsed  uint64
+    CallType string  // "call", "delegatecall", "create", etc.
+    Error    string
+}
+```
+
+→ **Phase 2C**로 분리해서 진행 권장 (Phase 3 전).
+
+---
+
+## Phase 3 수정 제안 — 어댑터 구성
+
+Keyless 3-way 기본 + opt-in 확장:
+
+```
+adapters/
+  internal/
+    httpx/          HTTP 공용 base (timeout/retry/rate limit/logging)
+    ethscan/        Etherscan-compat 공용 client (Routescan + Etherscan + Blockscout proxy)
+  rpc/              사용자 archive 노드 (debug_trace + archive 지원)
+  blockscout/       REST v2 primary + ethscan fallback
+  routescan/        ethscan + Routescan URL + Optimism free 지원
+  etherscan/        ethscan + Etherscan V2 + chainid + apikey (opt-in)
+  alchemy/          opt-in, debug_* + enhanced APIs
+```
+
+### 기본 활성화 (OSS 공개 안전)
+
+```yaml
+adapters:
+  rpc:        { enabled: true }    # 사용자 archive URL (로컬 override)
+  blockscout: { enabled: true }
+  routescan:  { enabled: true }
+  etherscan:  { enabled: false }   # 키+ paid chain일 때만
+  alchemy:    { enabled: false }   # opt-in
+```
+
+**Optimism 실무 신뢰도 순서**: user-RPC (archive) > Routescan (indexer #1) > Blockscout (indexer #2).
+
+---
+
+## 다음 세션 재개 체크리스트
+
+세션 재개 시 이 순서:
+
+1. [ ] 사용자가 archive RPC URL 제공 → `.env`의 `CSW_ADAPTERS__RPC__ENDPOINTS__10` 에 세팅
+2. [ ] 위 "Open Questions 우선순위 A" 4항목 실제 curl로 최종 확인
+3. [ ] 확인 결과 이 문서(`docs/research/external-api-coverage.md`) 업데이트
+4. [ ] Phase 2 확장 결정 (2C 별도 or Phase 3 내 포함)
+5. [ ] 결정에 따라 코드 작업 시작:
+   - Phase 2C: Capability/Query/Result 추가 + fake 확장
+   - Phase 3: 어댑터 구현 (3A~3G 순)
+
+---
+
+## 참고 자료 (공식 링크 모음)
+
+### Blockscout
+- 문서: https://docs.blockscout.com/devs/apis
+- REST v2: https://docs.blockscout.com/devs/apis/rest
+- Optimism Swagger: https://optimism.blockscout.com/api-docs
+
+### Routescan
+- 문서: https://routescan.io/documentation
+- Etherscan-like: https://routescan.io/documentation/api/etherscan-like/accounts
+- Snowtrace (같은 플랫폼): https://snowtrace.io/documentation
+
+### Etherscan V2
+- 문서: https://docs.etherscan.io/etherscan-v2
+- Rate limits: https://docs.etherscan.io/support/rate-limits
+- 가격: https://etherscan.io/apis
+
+### Alchemy
+- 문서: https://docs.alchemy.com/
+- Optimism: https://docs.alchemy.com/reference/optimism-api-quickstart
+- 가격: https://www.alchemy.com/pricing
+
+### Covalent / GoldRush
+- 문서: https://www.covalenthq.com/docs/api/
+- 신 플랫폼: https://goldrush.dev/platform
+
+### JSON-RPC 표준
+- Ethereum JSON-RPC spec: https://ethereum.org/en/developers/docs/apis/json-rpc/
+- Optimism 추가 methods: https://docs.optimism.io/builders/node-operators/json-rpc
+
+---
+
+**문서 상태**: Phase 3 시작 **전** 조사 단계. 내용은 2026-04-18 시점의 관측 + 공식 문서 인용. 재개 시 "Open Questions" 확인부터.
+
+---
+
+## 확정 우선순위 (2026-04-18)
+
+사용자 명시:
+1. **기본 전략 = 키 없는 공개 RPC + Blockscout + Routescan**
+2. **Etherscan은 후순위** — Optimism 미커버 이슈 확정, MVP 기본 bundle 제외
+3. **RPC는 사용자 자체 archive 노드** (외부 공개 RPC 아님)
+4. Alchemy/Covalent/Moralis는 **post-MVP** opt-in
+
+따라서 Phase 3 구현 집중 순서:
+- 1순위: `adapters/rpc/`, `adapters/blockscout/`, `adapters/routescan/` (3-way keyless)
+- 2순위: `adapters/etherscan/` (ETH-mainnet 확장 시점)
+- 3순위: `adapters/alchemy/` 등 opt-in 어댑터
