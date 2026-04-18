@@ -30,7 +30,7 @@
 - [ ] Makefile (`make test`, `make lint`, `make run-server`, `make run-worker`, `make up`, `make down`, `make migrate`, `make openapi`)
 - [ ] 린터 / 포매터 설정 (`golangci-lint` + `gofumpt`)
 - [ ] `.editorconfig`, `.gitignore` (private/ 포함), `.env.example`
-- [ ] `configs/config.default.yaml` (공개 기본값, 커밋)
+- [ ] `internal/config/defaults.yaml` (embed되는 단일 source of truth, 커밋)
 - [ ] `configs/config.example.yaml` (로컬 override 템플릿, 커밋)
 - [ ] `docker-compose.yml` (Postgres 17 + Redis 7.4)
 - [ ] CI 파이프라인 (GitHub Actions): fmt check / vet / lint / unit test / integration test / build
@@ -70,7 +70,6 @@ chain-sync-watch/
 ├── web/                     [Phase 9] Next.js 프론트엔드
 ├── migrations/              [Phase 6]
 ├── configs/
-│   ├── config.default.yaml  공개 가능한 기본값 (커밋)
 │   ├── config.example.yaml  사용자 로컬 오버라이드 템플릿 (커밋)
 │   └── config.local.yaml    실사용자 오버라이드 (.gitignore)
 ├── docs/
@@ -139,10 +138,10 @@ chain-sync-watch/
 **라이브러리**: [`knadh/koanf`](https://github.com/knadh/koanf) — multi-provider 조합 가능, viper보다 경량·깔끔
 
 **로딩 순서**:
-1. 내장 default (`configs/config.default.yaml`, embed.FS로 바이너리에 포함)
-2. 선택적 로컬 오버라이드 (`configs/config.local.yaml` — 있으면 병합)
-3. 환경변수 (`CSW_*` prefix, 이중 언더스코어로 nesting) — 최종 우선권
-4. `.env` 파일은 shell이 자동 export(직접 `godotenv`로 보강)
+1. 내장 default (`internal/config/defaults.yaml`, `go:embed`로 바이너리에 포함 — 단일 source of truth)
+2. 선택적 로컬 오버라이드 (`configs/config.local.yaml` — 있으면 병합, `.gitignore`)
+3. 환경변수 (`CSW_*` prefix, 이중 언더스코어 `__`로 nesting) — 최종 우선권
+4. `.env` 파일은 shell이 자동 export (직접 `godotenv`로 보강 가능)
 
 **비밀/공개 분리 원칙**:
 - **공개 가능한 기본값** (체인 목록, endpoint URL, rate limit, timeout 등) → yaml
@@ -150,14 +149,14 @@ chain-sync-watch/
 - **사용자별 커스터마이즈** → `config.local.yaml` (gitignore) 또는 env 오버라이드
 
 #### 작업 체크리스트
-- [ ] `configs/config.default.yaml` 작성 (커밋)
+- [ ] `internal/config/defaults.yaml` 작성 (embed되는 단일 source of truth, 커밋)
 - [ ] `configs/config.example.yaml` 작성 (커밋, 사용자가 `config.local.yaml`로 복사해서 쓰는 템플릿)
 - [ ] `configs/config.local.yaml`은 `.gitignore`
 - [ ] `internal/config/config.go`:
-  - `Config` struct (server, log, chains, adapters, verification, database, redis ...)
-  - `Load(ctx) (*Config, error)` — koanf로 위 로딩 순서 구현
-  - `embed.FS`로 `config.default.yaml` 바이너리 embed
-  - env 오버라이드: `CSW_` prefix, nested는 `__` delimiter (예: `CSW_ADAPTERS_RPC_ENDPOINTS__10=...`)
+  - `Config` struct (server, worker, log, chains, adapters, verification, raw_response)
+  - `Load(*Options) (*Config, error)` — koanf로 위 로딩 순서 구현
+  - `//go:embed defaults.yaml`로 바이너리 embed
+  - env 오버라이드: `CSW_` prefix, nested는 `__` delimiter (예: `CSW_ADAPTERS__RPC__ENDPOINTS__10=...`)
 - [ ] 필수 필드 누락·타입 오류 시 fail-fast (koanf `k.Unmarshal` + struct 검증)
 - [ ] 테스트:
   - default만 로드 → 기본값 검증
@@ -165,56 +164,11 @@ chain-sync-watch/
   - env override → 우선순위 확인
   - 필수 필드 누락 → 명확한 에러
 
-#### `configs/config.default.yaml` (공개 가능한 기본값)
+#### `internal/config/defaults.yaml` (embed되는 단일 source of truth)
 
-```yaml
-server:
-  addr: ":8080"
-  cors_origins: ["http://localhost:3000"]
-  read_timeout: 10s
-  write_timeout: 30s
+바이너리에 `//go:embed`로 포함되어 런타임에 디스크 파일 의존 없이 동작. 사용자 override는 `configs/config.local.yaml` 또는 env(`CSW_*`)로 주입.
 
-log:
-  level: info
-  format: json
-
-chains:
-  - id: 10
-    slug: optimism
-    display_name: "Optimism"
-
-adapters:
-  rpc:
-    enabled: true
-    endpoints:
-      10: "https://optimism-rpc.publicnode.com"
-    archive: false
-    rate_limit_rps: 10
-    timeout: 15s
-    max_retries: 3
-
-  blockscout:
-    enabled: true
-    endpoints:
-      10: "https://optimism.blockscout.com"
-    rate_limit_rps: 2
-    timeout: 15s
-    max_retries: 3
-
-  etherscan:
-    enabled: false              # env로 API 키 주입 시 true로 변경
-    base_url: "https://api.etherscan.io/v2/api"
-    rate_limit_rps: 5
-    timeout: 15s
-    max_retries: 3
-
-verification:
-  max_concurrent_per_source: 5
-  default_timeout: 30s
-
-raw_response:
-  persist: false               # true면 각 소스 응답 원문을 diff 레코드에 첨부
-```
+실제 내용은 [internal/config/defaults.yaml](../../internal/config/defaults.yaml) 참조 (commit 후 링크 유효).
 
 #### `.env.example` (비밀 placeholder)
 
@@ -225,13 +179,13 @@ DATABASE_URL=postgres://csw:csw@localhost:5432/csw?sslmode=disable
 # Redis
 REDIS_URL=redis://localhost:6379/0
 
-# Etherscan (선택 — 키 있으면 adapters.etherscan.enabled=true로)
-CSW_ADAPTERS_ETHERSCAN_API_KEY=
-# CSW_ADAPTERS_ETHERSCAN_ENABLED=true
+# Etherscan (선택 — 키 있으면 enabled=true로)
+CSW_ADAPTERS__ETHERSCAN__API_KEY=
+# CSW_ADAPTERS__ETHERSCAN__ENABLED=true
 
-# yaml 값 오버라이드 예시 (이중 underscore = nesting)
-# CSW_SERVER_ADDR=:9090
-# CSW_ADAPTERS_RPC_ENDPOINTS__10=https://your-private-rpc.example.com
+# yaml 값 오버라이드 예시 (이중 underscore `__` = nesting, 단일 `_`는 키 내부 유지)
+# CSW_SERVER__ADDR=:9090
+# CSW_ADAPTERS__RPC__ENDPOINTS__10=https://your-private-rpc.example.com
 
 # 사용자 custom 어댑터 endpoint (예시; 실제 URL은 공개 금지)
 # CUSTOM_ADAPTER_GRAPHQL_ENDPOINT=

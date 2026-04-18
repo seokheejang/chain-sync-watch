@@ -1,0 +1,116 @@
+# golangci-lint configuration.
+# Version: v2 (schema updated for golangci-lint 2.x).
+#
+# Philosophy: enforce DDD boundaries by keeping the domain layers free of
+# infrastructure imports. Everything else is standard Go hygiene.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck        # unchecked errors
+    - govet           # standard compile-time checks
+    - ineffassign     # ineffectual assignments
+    - staticcheck     # modern successor to golint
+    - unused          # dead code
+    - gocritic        # opinionated but useful
+    - gosec           # security (SQL injection, hardcoded creds, etc.)
+    - revive          # golint-ish rules
+    - misspell        # typos in comments/strings
+    - bodyclose       # http.Response.Body leaks
+    - unconvert       # redundant conversions
+    - depguard        # DDD boundary enforcement
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true      # we document at the type level, not every symbol
+        - name: if-return
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unused-parameter
+          disabled: true      # rest layer uses signatures we can't slim
+
+    gosec:
+      excludes:
+        - G304              # file opened by variable — acceptable for loader
+
+    depguard:
+      rules:
+        # Domain core packages must stay free of frameworks.
+        domain-purity:
+          list-mode: strict
+          files:
+            - "**/internal/chain/**"
+            - "**/internal/source/**"
+            - "**/internal/verification/**"
+            - "**/internal/diff/**"
+            - "!**/*_test.go"
+            - "!**/fake/**"
+          allow:
+            - "$gostd"
+            - "github.com/seokheejang/chain-sync-watch/internal/chain"
+            - "github.com/seokheejang/chain-sync-watch/internal/source"
+            - "github.com/seokheejang/chain-sync-watch/internal/verification"
+            - "github.com/seokheejang/chain-sync-watch/internal/diff"
+          deny:
+            - pkg: "gorm.io/gorm"
+              desc: "domain layer must not depend on ORMs"
+            - pkg: "github.com/danielgtaylor/huma/v2"
+              desc: "domain layer must not depend on HTTP frameworks"
+            - pkg: "github.com/hibiken/asynq"
+              desc: "domain layer must not depend on job queues"
+            - pkg: "github.com/ethereum/go-ethereum"
+              desc: "domain layer must not depend on RPC clients — use adapters"
+            - pkg: "github.com/go-chi/chi"
+              desc: "domain layer must not depend on HTTP routers"
+
+        # Application layer may depend on domains (via ports) but not infra.
+        application-boundary:
+          list-mode: strict
+          files:
+            - "**/internal/application/**"
+            - "!**/*_test.go"
+          allow:
+            - "$gostd"
+            - "github.com/seokheejang/chain-sync-watch/internal/chain"
+            - "github.com/seokheejang/chain-sync-watch/internal/source"
+            - "github.com/seokheejang/chain-sync-watch/internal/verification"
+            - "github.com/seokheejang/chain-sync-watch/internal/diff"
+          deny:
+            - pkg: "gorm.io/gorm"
+              desc: "application must not depend on ORMs — use RunRepository/DiffRepository ports"
+            - pkg: "github.com/hibiken/asynq"
+              desc: "application must not depend on asynq — use JobDispatcher port"
+            - pkg: "github.com/danielgtaylor/huma/v2"
+              desc: "application must not depend on HTTP frameworks"
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      - path: internal/observability/logger.go
+        linters:
+          - gocritic
+        text: "hugeParam"      # slog.Record passed by value per stdlib convention
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

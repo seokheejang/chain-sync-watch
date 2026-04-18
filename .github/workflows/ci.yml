@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.24"
+
+jobs:
+  # ----- Formatting & static analysis ------------------------------------
+  fmt-lint:
+    name: fmt + vet + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
+
+      - name: gofumpt check
+        run: make fmt-check
+
+      - name: go vet
+        run: make vet
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.5.0
+          args: --timeout=5m
+
+  # ----- Unit tests ------------------------------------------------------
+  test-unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run tests
+        run: make test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage.out
+          if-no-files-found: ignore
+
+  # ----- Integration tests (testcontainers) -----------------------------
+  test-integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    # Skip until Phase 6 introduces testcontainer-backed tests.
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run integration tests
+        run: make test-integration
+
+  # ----- Build all binaries ---------------------------------------------
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [csw-server, csw-worker, csw]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build ${{ matrix.target }}
+        # cmd/<target> may not exist yet in early phases — skip gracefully
+        # until the corresponding main.go lands.
+        run: |
+          if [ -d "cmd/${{ matrix.target }}" ]; then
+            make build-${{ matrix.target }}
+          else
+            echo "cmd/${{ matrix.target }} does not exist yet; skipping."
+          fi

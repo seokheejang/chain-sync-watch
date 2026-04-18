@@ -1,0 +1,36 @@
+# Copy this file to configs/config.local.yaml and edit.
+# config.local.yaml is gitignored and overrides config.default.yaml.
+# Environment variables (CSW_*) override both.
+#
+# Leave keys commented unless you actually want to override.
+
+# server:
+#   addr: ":9090"
+#   cors_origins:
+#     - "http://localhost:3000"
+#     - "http://localhost:5173"
+
+# log:
+#   level: debug
+#   format: text
+
+# chains:
+#   - id: 10
+#     slug: optimism
+#     display_name: "Optimism"
+#   - id: 1
+#     slug: ethereum
+#     display_name: "Ethereum"
+
+# adapters:
+#   rpc:
+#     endpoints:
+#       10: "https://your-alternate-rpc.example.com"
+#     archive: true            # set true if using an archive node
+#
+#   blockscout:
+#     endpoints:
+#       10: "https://your-mirror.blockscout.example.com"
+#
+#   etherscan:
+#     enabled: true            # enabled via env CSW_ADAPTERS_ETHERSCAN_API_KEY

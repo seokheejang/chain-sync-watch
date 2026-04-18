@@ -1,0 +1,68 @@
+# Binaries and build artifacts
+/bin/
+/dist/
+/tmp/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test / coverage
+*.test
+coverage.out
+coverage.html
+coverage.txt
+*.prof
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependencies
+vendor/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Local config overrides (never commit)
+configs/config.local.yaml
+configs/config.*.local.yaml
+
+# User's private local code (custom adapters, internal-only work)
+# MUST stay out of the public repo — see memory rule "private/ directory commit ban"
+private/
+
+# Frontend (Next.js + pnpm)
+node_modules/
+.next/
+out/
+.turbo/
+.pnpm-store/
+*.tsbuildinfo
+.vercel/
+web/openapi.json
+
+# IDE / editor
+.idea/
+.vscode/*
+!.vscode/settings.shared.json
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Claude Code — share .claude/settings.json, keep personal overrides local
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Kubernetes / Helm
+deploy/helm/**/charts/
+*.tgz

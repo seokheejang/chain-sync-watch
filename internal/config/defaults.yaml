@@ -1,0 +1,79 @@
+# chain-sync-watch — embedded default configuration.
+#
+# This file is embedded into the binary via go:embed. It is the single
+# source of truth for defaults. To override values, either:
+#
+#   1. Create configs/config.local.yaml (gitignored) with the keys you
+#      want to change. It is merged on top of these defaults at startup.
+#   2. Set an environment variable with the CSW_ prefix; double underscore
+#      ("__") separates nested keys, single underscore ("_") stays literal
+#      inside a key name:
+#
+#        CSW_SERVER__ADDR=:9090
+#        CSW_LOG__LEVEL=debug
+#        CSW_ADAPTERS__RPC__ENDPOINTS__10=https://alt-rpc.example.com
+#        CSW_ADAPTERS__RPC__RATE_LIMIT_RPS=20
+#
+# Environment variables take final precedence over both files.
+#
+# Secrets (DB password, API keys, private endpoints) belong in .env only,
+# never in this file.
+
+server:
+  addr: ":8080"
+  cors_origins:
+    - "http://localhost:3000"
+  read_timeout: 10s
+  write_timeout: 30s
+  shutdown_grace: 10s
+
+worker:
+  concurrency: 10
+  health_addr: ":8081"
+  shutdown_grace: 30s
+
+log:
+  level: info        # debug | info | warn | error
+  format: json       # json | text
+
+chains:
+  - id: 10
+    slug: optimism
+    display_name: "Optimism"
+
+# Bundled source adapters. Each is independently enabled. Disabled
+# adapters are skipped in the server wiring (cmd/csw-server/main.go).
+adapters:
+  rpc:
+    enabled: true
+    endpoints:
+      10: "https://optimism-rpc.publicnode.com"
+    archive: false           # true for archive nodes (historical balance/nonce)
+    rate_limit_rps: 10
+    timeout: 15s
+    max_retries: 3
+
+  blockscout:
+    enabled: true
+    endpoints:
+      10: "https://optimism.blockscout.com"
+    rate_limit_rps: 2
+    timeout: 15s
+    max_retries: 3
+
+  etherscan:
+    enabled: false           # requires api_key via env (CSW_ADAPTERS__ETHERSCAN__API_KEY)
+    base_url: "https://api.etherscan.io/v2/api"
+    api_key: ""
+    rate_limit_rps: 5
+    timeout: 15s
+    max_retries: 3
+
+verification:
+  max_concurrent_per_source: 5
+  default_timeout: 30s
+
+# Persist raw adapter responses alongside each discrepancy (audit/debug).
+# Off by default to save storage and limit incidental data retention.
+raw_response:
+  persist: false
