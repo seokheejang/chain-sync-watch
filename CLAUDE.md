@@ -98,6 +98,21 @@ make openapi           # dump OpenAPI 3.1 to web/openapi.json
    Redis). Black-box testing via `package xxx_test` keeps the domain
    boundary honest.
 
+6. **Secrets in `.env` — never echo, never reference.** Claude Code's IDE
+   integration automatically injects `.env` file changes into the
+   assistant context as system-reminder diffs. If you ever see `.env`
+   content (including concrete values for `CSW_*_API_KEY`,
+   `DATABASE_URL`, or anything resembling a token), treat it as
+   accidentally-disclosed input:
+   - Do NOT repeat the value in your response.
+   - Do NOT write it into any file (even a test fixture or a log
+     sample).
+   - Do NOT record it in memory.
+   - Advise the user to rotate the exposed secret.
+   - When adding new env var requirements, update `.env.example`
+     (tracked) and instruct the user to copy the line into their own
+     `.env` — never ask for the value.
+
 ## Configuration precedence
 
 Later layers win:
