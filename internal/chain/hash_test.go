@@ -9,9 +9,10 @@ import (
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 )
 
-// A real Optimism-style block hash used purely as a well-formed vector
-// with mixed hex digits. No internal/sensitive data.
-const sampleHashLower = "0x99b8da780155e8770edfe7d43f96c1f722234984d5cfdb4630d5445d26e9884f"
+// Synthetic 32-byte hash used as a well-formed test vector. Mixed hex
+// digits ensure we exercise encoding paths without tying the test to
+// any real-chain observation.
+const sampleHashLower = "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
 func TestHash32_NewHash32_Valid(t *testing.T) {
 	cases := []string{
@@ -49,9 +50,9 @@ func TestHash32_NewHash32_Invalid(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"missing 0x", "99b8da780155e8770edfe7d43f96c1f722234984d5cfdb4630d5445d26e9884f"},
-		{"too short", "0x99b8"},
+		{"too short", "0xabcd"},
 		{"too long", sampleHashLower + "00"},
-		{"non-hex char", "0x99b8da780155e8770edfe7d43f96c1f722234984d5cfdb4630d5445d26e988GZ"},
+		{"non-hex char", "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456GZ"},
 		{"only prefix", "0x"},
 	}
 	for _, tc := range cases {
@@ -99,7 +100,7 @@ func TestHash32_UnmarshalJSON_Rejects(t *testing.T) {
 		`null`,
 		`""`,
 		`"0x"`,
-		`"0x99b8"`,
+		`"0xabcd"`,
 		`"not-a-hash"`,
 		`123`,
 		`{}`,

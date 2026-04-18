@@ -18,7 +18,7 @@ func TestBlockRange_NewBlockRange_Valid(t *testing.T) {
 		{"single block", 100, 100, 1},
 		{"small range", 100, 102, 3},
 		{"from zero", 0, 10, 11},
-		{"large range", 0, 150449305, 150449306},
+		{"large range", 0, 16_777_216, 16_777_217},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

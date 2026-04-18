@@ -34,19 +34,21 @@ func TestBlockResult_ZeroValueIsNilEverywhere(t *testing.T) {
 func TestBlockResult_PopulatedFields(t *testing.T) {
 	// A round-about construction spec that pins down the field types
 	// and proves the types interoperate with chain/* as expected.
-	hash, err := chain.NewHash32("0x99b8da780155e8770edfe7d43f96c1f722234984d5cfdb4630d5445d26e9884f")
+	hash, err := chain.NewHash32("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.NoError(t, err)
-	parent, err := chain.NewHash32("0xa2a477a65ff8dc73162ef5a9b29f2192a0ca09c0ada0f9db6d3b72dab231a2f3")
+	parent, err := chain.NewHash32("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	require.NoError(t, err)
+	// 0x4200...0011 is a well-known Optimism predeploy (SequencerFeeVault),
+	// universally documented — safe to use as a concrete fixture.
 	miner, err := chain.NewAddress("0x4200000000000000000000000000000000000011")
 	require.NoError(t, err)
 
-	ts := time.Date(2026, 4, 18, 7, 29, 47, 0, time.UTC)
-	tx := uint64(38)
-	gas := uint64(18770708)
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tx := uint64(42)
+	gas := uint64(12_345_678)
 
 	r := source.BlockResult{
-		Number:     chain.NewBlockNumber(150_449_305),
+		Number:     chain.NewBlockNumber(16_777_216),
 		Hash:       &hash,
 		ParentHash: &parent,
 		Timestamp:  &ts,
@@ -57,11 +59,11 @@ func TestBlockResult_PopulatedFields(t *testing.T) {
 		FetchedAt:  time.Now(),
 	}
 
-	require.Equal(t, uint64(150_449_305), r.Number.Uint64())
+	require.Equal(t, uint64(16_777_216), r.Number.Uint64())
 	require.Equal(t, hash, *r.Hash)
 	require.Equal(t, parent, *r.ParentHash)
 	require.Equal(t, ts, *r.Timestamp)
-	require.Equal(t, uint64(38), *r.TxCount)
+	require.Equal(t, uint64(42), *r.TxCount)
 	require.Equal(t, miner, *r.Miner)
 }
 
@@ -84,10 +86,10 @@ func TestAddressAtBlockQuery_CarriesBlockNumber(t *testing.T) {
 	require.NoError(t, err)
 	q := source.AddressAtBlockQuery{
 		Address: addr,
-		Block:   chain.NewBlockNumber(150_000_000),
+		Block:   chain.NewBlockNumber(16_777_216),
 	}
 	require.Equal(t, addr, q.Address)
-	require.Equal(t, uint64(150_000_000), q.Block.Uint64())
+	require.Equal(t, uint64(16_777_216), q.Block.Uint64())
 }
 
 func TestSnapshotResult_AllCountsOptional(t *testing.T) {
@@ -99,9 +101,9 @@ func TestSnapshotResult_AllCountsOptional(t *testing.T) {
 	require.Nil(t, r.TotalContractCount)
 	require.Nil(t, r.ERC20TokenCount)
 
-	n := uint64(833_000_000)
+	n := uint64(10_000_000)
 	r.TotalAddressCount = &n
-	require.Equal(t, uint64(833_000_000), *r.TotalAddressCount)
+	require.Equal(t, uint64(10_000_000), *r.TotalAddressCount)
 }
 
 // SnapshotQuery is empty — we lock that in so later adapters don't

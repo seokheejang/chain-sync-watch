@@ -66,7 +66,7 @@ func TestFake_FetchSnapshot_DefaultsToUnsupported(t *testing.T) {
 // ----- SetBlockResponse & friends return the configured value --------------
 
 func TestFake_SetBlockResponse(t *testing.T) {
-	hash, _ := chain.NewHash32("0x99b8da780155e8770edfe7d43f96c1f722234984d5cfdb4630d5445d26e9884f")
+	hash, _ := chain.NewHash32("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	want := source.BlockResult{
 		Number:   chain.NewBlockNumber(42),
 		Hash:     &hash,
