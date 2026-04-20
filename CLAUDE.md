@@ -113,6 +113,31 @@ make openapi           # dump OpenAPI 3.1 to web/openapi.json
      (tracked) and instruct the user to copy the line into their own
      `.env` — never ask for the value.
 
+7. **Comment discipline by layer.** The domain atoms
+   (`internal/chain`, `internal/source`, `internal/verification`,
+   `internal/diff`) get "why" doc comments on every public symbol —
+   these packages are load-bearing and drift in their semantics ripples
+   across the whole codebase, so the prose is load-bearing too.
+   Everything else is lighter:
+   - **Adapters** (`adapters/*`) and **infrastructure / application**
+     (`internal/infrastructure/*`, `internal/application/*`) get
+     doc comments on **public API only** — the constructor, the
+     interface methods, exported options. Unexported helpers take
+     **one line max** (or none, when the name already explains
+     itself). A 4-line rationale on `encodeBalanceOf` is waste.
+   - **Test files** get no doc comments. Test function names are
+     the spec; `// ...` headers inside a test are only worth it when
+     they name a non-obvious setup constraint (e.g., "NoBody is non-
+     nil — force GetBody path"). Never narrate what the assertions
+     do.
+   - **Package doc comments** stay full-prose everywhere — a new
+     reader skimming `go doc ./...` should get the purpose of each
+     package in a paragraph.
+
+   If in doubt, err lighter outside the domain atoms. Over-commenting
+   rots faster than code; a single "why" comment beats four "what"
+   comments every time.
+
 ## Configuration precedence
 
 Later layers win:
