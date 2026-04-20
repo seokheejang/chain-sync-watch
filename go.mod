@@ -1,6 +1,6 @@
 module github.com/seokheejang/chain-sync-watch
 
-go 1.24
+go 1.24.0
 
 toolchain go1.24.6
 
@@ -12,6 +12,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.33.0
+	golang.org/x/time v0.14.0
 )
 
 require (
