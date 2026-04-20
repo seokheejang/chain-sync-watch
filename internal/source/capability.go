@@ -35,6 +35,24 @@ const (
 	CapTotalTxCount       Capability = "snapshot.total_txs"
 	CapERC20TokenCount    Capability = "snapshot.erc20_token_count"
 	CapTotalContractCount Capability = "snapshot.total_contracts"
+
+	// --- Per-address ERC-20 (Phase 2C) ---
+	// Balance of a specific ERC-20 token held by an address. RPC can
+	// serve this via eth_call to balanceOf(); 3rd-party indexers
+	// cache it. Tier C — mixed.
+	CapERC20BalanceAtLatest Capability = "address.erc20_balance_at_latest"
+	// The full list of tokens held by an address. Reconstructing this
+	// from RPC requires scanning Transfer logs (expensive); indexers
+	// serve it directly. Tier B — indexer-derived.
+	CapERC20HoldingsAtLatest Capability = "address.erc20_holdings_at_latest"
+
+	// --- Internal transactions / traces (Phase 2C) ---
+	// Internal calls within a single transaction or all internal calls
+	// recorded in a block. Archive RPC can replay traces via
+	// debug_traceTransaction / debug_traceBlockByNumber; indexers
+	// cache decoded traces. Tier C — mixed.
+	CapInternalTxByTx    Capability = "trace.internal_tx_by_tx"
+	CapInternalTxByBlock Capability = "trace.internal_tx_by_block"
 )
 
 // AllCapabilities returns every capability the core exposes. Callers
@@ -61,5 +79,9 @@ func AllCapabilities() []Capability {
 		CapTotalTxCount,
 		CapERC20TokenCount,
 		CapTotalContractCount,
+		CapERC20BalanceAtLatest,
+		CapERC20HoldingsAtLatest,
+		CapInternalTxByTx,
+		CapInternalTxByBlock,
 	}
 }

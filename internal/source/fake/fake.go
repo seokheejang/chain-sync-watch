@@ -37,17 +37,25 @@ type Source struct {
 	// Static responses. Nil handler + zero response means "return
 	// ErrUnsupported" so tests that forget to configure a method get a
 	// clear signal instead of an empty success.
-	staticBlock            *blockEnvelope
-	staticAddressLatest    *addressLatestEnvelope
-	staticAddressAtBlock   *addressAtBlockEnvelope
-	staticSnapshot         *snapshotEnvelope
+	staticBlock             *blockEnvelope
+	staticAddressLatest     *addressLatestEnvelope
+	staticAddressAtBlock    *addressAtBlockEnvelope
+	staticSnapshot          *snapshotEnvelope
+	staticERC20Balance      *erc20BalanceEnvelope
+	staticERC20Holdings     *erc20HoldingsEnvelope
+	staticInternalTxByTx    *internalTxEnvelope
+	staticInternalTxByBlock *internalTxEnvelope
 
 	// Dynamic handlers — when set, override any static response for
 	// that method.
-	blockHandler            func(context.Context, source.BlockQuery) (source.BlockResult, error)
-	addressLatestHandler    func(context.Context, source.AddressQuery) (source.AddressLatestResult, error)
-	addressAtBlockHandler   func(context.Context, source.AddressAtBlockQuery) (source.AddressAtBlockResult, error)
-	snapshotHandler         func(context.Context, source.SnapshotQuery) (source.SnapshotResult, error)
+	blockHandler             func(context.Context, source.BlockQuery) (source.BlockResult, error)
+	addressLatestHandler     func(context.Context, source.AddressQuery) (source.AddressLatestResult, error)
+	addressAtBlockHandler    func(context.Context, source.AddressAtBlockQuery) (source.AddressAtBlockResult, error)
+	snapshotHandler          func(context.Context, source.SnapshotQuery) (source.SnapshotResult, error)
+	erc20BalanceHandler      func(context.Context, source.ERC20BalanceQuery) (source.ERC20BalanceResult, error)
+	erc20HoldingsHandler     func(context.Context, source.ERC20HoldingsQuery) (source.ERC20HoldingsResult, error)
+	internalTxByTxHandler    func(context.Context, source.InternalTxByTxQuery) (source.InternalTxResult, error)
+	internalTxByBlockHandler func(context.Context, source.InternalTxByBlockQuery) (source.InternalTxResult, error)
 
 	calls []Call
 }
@@ -56,10 +64,34 @@ type Source struct {
 // frequently want to assert "method errored with X" without having to
 // set a zero-value result.
 type (
-	blockEnvelope          struct{ r source.BlockResult; err error }
-	addressLatestEnvelope  struct{ r source.AddressLatestResult; err error }
-	addressAtBlockEnvelope struct{ r source.AddressAtBlockResult; err error }
-	snapshotEnvelope       struct{ r source.SnapshotResult; err error }
+	blockEnvelope struct {
+		r   source.BlockResult
+		err error
+	}
+	addressLatestEnvelope struct {
+		r   source.AddressLatestResult
+		err error
+	}
+	addressAtBlockEnvelope struct {
+		r   source.AddressAtBlockResult
+		err error
+	}
+	snapshotEnvelope struct {
+		r   source.SnapshotResult
+		err error
+	}
+	erc20BalanceEnvelope struct {
+		r   source.ERC20BalanceResult
+		err error
+	}
+	erc20HoldingsEnvelope struct {
+		r   source.ERC20HoldingsResult
+		err error
+	}
+	internalTxEnvelope struct {
+		r   source.InternalTxResult
+		err error
+	}
 )
 
 // Option configures a Source at construction time.
@@ -171,6 +203,78 @@ func (s *Source) FetchSnapshot(ctx context.Context, q source.SnapshotQuery) (sou
 	return source.SnapshotResult{}, source.ErrUnsupported
 }
 
+func (s *Source) FetchERC20Balance(ctx context.Context, q source.ERC20BalanceQuery) (source.ERC20BalanceResult, error) {
+	s.record("FetchERC20Balance", q)
+	if err := ctx.Err(); err != nil {
+		return source.ERC20BalanceResult{}, err
+	}
+	s.mu.Lock()
+	h := s.erc20BalanceHandler
+	env := s.staticERC20Balance
+	s.mu.Unlock()
+	if h != nil {
+		return h(ctx, q)
+	}
+	if env != nil {
+		return env.r, env.err
+	}
+	return source.ERC20BalanceResult{}, source.ErrUnsupported
+}
+
+func (s *Source) FetchERC20Holdings(ctx context.Context, q source.ERC20HoldingsQuery) (source.ERC20HoldingsResult, error) {
+	s.record("FetchERC20Holdings", q)
+	if err := ctx.Err(); err != nil {
+		return source.ERC20HoldingsResult{}, err
+	}
+	s.mu.Lock()
+	h := s.erc20HoldingsHandler
+	env := s.staticERC20Holdings
+	s.mu.Unlock()
+	if h != nil {
+		return h(ctx, q)
+	}
+	if env != nil {
+		return env.r, env.err
+	}
+	return source.ERC20HoldingsResult{}, source.ErrUnsupported
+}
+
+func (s *Source) FetchInternalTxByTx(ctx context.Context, q source.InternalTxByTxQuery) (source.InternalTxResult, error) {
+	s.record("FetchInternalTxByTx", q)
+	if err := ctx.Err(); err != nil {
+		return source.InternalTxResult{}, err
+	}
+	s.mu.Lock()
+	h := s.internalTxByTxHandler
+	env := s.staticInternalTxByTx
+	s.mu.Unlock()
+	if h != nil {
+		return h(ctx, q)
+	}
+	if env != nil {
+		return env.r, env.err
+	}
+	return source.InternalTxResult{}, source.ErrUnsupported
+}
+
+func (s *Source) FetchInternalTxByBlock(ctx context.Context, q source.InternalTxByBlockQuery) (source.InternalTxResult, error) {
+	s.record("FetchInternalTxByBlock", q)
+	if err := ctx.Err(); err != nil {
+		return source.InternalTxResult{}, err
+	}
+	s.mu.Lock()
+	h := s.internalTxByBlockHandler
+	env := s.staticInternalTxByBlock
+	s.mu.Unlock()
+	if h != nil {
+		return h(ctx, q)
+	}
+	if env != nil {
+		return env.r, env.err
+	}
+	return source.InternalTxResult{}, source.ErrUnsupported
+}
+
 // --- Configuration helpers -----------------------------------------------
 
 // SetBlockResponse installs a static response+error for FetchBlock.
@@ -237,6 +341,70 @@ func (s *Source) SetSnapshotHandler(fn func(context.Context, source.SnapshotQuer
 	s.snapshotHandler = fn
 }
 
+// SetERC20BalanceResponse installs a static response+error for
+// FetchERC20Balance.
+func (s *Source) SetERC20BalanceResponse(r source.ERC20BalanceResult, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staticERC20Balance = &erc20BalanceEnvelope{r: r, err: err}
+}
+
+// SetERC20BalanceHandler overrides FetchERC20Balance with a dynamic
+// function.
+func (s *Source) SetERC20BalanceHandler(fn func(context.Context, source.ERC20BalanceQuery) (source.ERC20BalanceResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.erc20BalanceHandler = fn
+}
+
+// SetERC20HoldingsResponse installs a static response+error for
+// FetchERC20Holdings.
+func (s *Source) SetERC20HoldingsResponse(r source.ERC20HoldingsResult, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staticERC20Holdings = &erc20HoldingsEnvelope{r: r, err: err}
+}
+
+// SetERC20HoldingsHandler overrides FetchERC20Holdings with a dynamic
+// function.
+func (s *Source) SetERC20HoldingsHandler(fn func(context.Context, source.ERC20HoldingsQuery) (source.ERC20HoldingsResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.erc20HoldingsHandler = fn
+}
+
+// SetInternalTxByTxResponse installs a static response+error for
+// FetchInternalTxByTx.
+func (s *Source) SetInternalTxByTxResponse(r source.InternalTxResult, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staticInternalTxByTx = &internalTxEnvelope{r: r, err: err}
+}
+
+// SetInternalTxByTxHandler overrides FetchInternalTxByTx with a
+// dynamic function.
+func (s *Source) SetInternalTxByTxHandler(fn func(context.Context, source.InternalTxByTxQuery) (source.InternalTxResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.internalTxByTxHandler = fn
+}
+
+// SetInternalTxByBlockResponse installs a static response+error for
+// FetchInternalTxByBlock.
+func (s *Source) SetInternalTxByBlockResponse(r source.InternalTxResult, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staticInternalTxByBlock = &internalTxEnvelope{r: r, err: err}
+}
+
+// SetInternalTxByBlockHandler overrides FetchInternalTxByBlock with a
+// dynamic function.
+func (s *Source) SetInternalTxByBlockHandler(fn func(context.Context, source.InternalTxByBlockQuery) (source.InternalTxResult, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.internalTxByBlockHandler = fn
+}
+
 // --- Call recording ------------------------------------------------------
 
 // Calls returns a snapshot of the recorded invocations in call order.
@@ -263,10 +431,18 @@ func (s *Source) Reset() {
 	s.staticAddressLatest = nil
 	s.staticAddressAtBlock = nil
 	s.staticSnapshot = nil
+	s.staticERC20Balance = nil
+	s.staticERC20Holdings = nil
+	s.staticInternalTxByTx = nil
+	s.staticInternalTxByBlock = nil
 	s.blockHandler = nil
 	s.addressLatestHandler = nil
 	s.addressAtBlockHandler = nil
 	s.snapshotHandler = nil
+	s.erc20BalanceHandler = nil
+	s.erc20HoldingsHandler = nil
+	s.internalTxByTxHandler = nil
+	s.internalTxByBlockHandler = nil
 }
 
 func (s *Source) record(method string, args any) {

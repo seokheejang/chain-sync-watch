@@ -48,6 +48,14 @@ func TestCapability_StringValues(t *testing.T) {
 		{source.CapTotalTxCount, "snapshot.total_txs"},
 		{source.CapERC20TokenCount, "snapshot.erc20_token_count"},
 		{source.CapTotalContractCount, "snapshot.total_contracts"},
+
+		// Per-address ERC-20 (Phase 2C)
+		{source.CapERC20BalanceAtLatest, "address.erc20_balance_at_latest"},
+		{source.CapERC20HoldingsAtLatest, "address.erc20_holdings_at_latest"},
+
+		// Internal-tx traces (Phase 2C)
+		{source.CapInternalTxByTx, "trace.internal_tx_by_tx"},
+		{source.CapInternalTxByBlock, "trace.internal_tx_by_block"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.want, func(t *testing.T) {
@@ -68,5 +76,5 @@ func TestCapability_AllKnown(t *testing.T) {
 		require.False(t, seen[c], "duplicate capability: %s", c)
 		seen[c] = true
 	}
-	require.Len(t, all, 18, "update this count when adding capabilities")
+	require.Len(t, all, 22, "update this count when adding capabilities")
 }

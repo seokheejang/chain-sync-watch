@@ -114,3 +114,41 @@ func TestSnapshotQuery_IsEmpty(t *testing.T) {
 	var q source.SnapshotQuery
 	_ = q // compile-only check; intentionally no fields to assert on
 }
+
+// AddressQuery gained an Anchor field in Phase 2C. A zero-value Anchor
+// must still mean "latest" so pre-2C callers who construct queries by
+// setting only Address keep working.
+func TestAddressQuery_ZeroAnchorIsLatest(t *testing.T) {
+	q := source.AddressQuery{}
+	require.True(t, q.Anchor.IsZero())
+	require.Equal(t, "latest", q.Anchor.String())
+}
+
+func TestAddressQuery_ExplicitFinalizedAnchor(t *testing.T) {
+	q := source.AddressQuery{Anchor: source.NewBlockTagFinalized()}
+	require.Equal(t, "finalized", q.Anchor.String())
+}
+
+// ReflectedBlock is nil on the zero value of each Result type. Leaving
+// it nil must be the explicit signal for "source did not expose the
+// metadata" — adapters that know the height set it, ones that do not
+// leave it alone.
+func TestResults_ReflectedBlockDefaultsNil(t *testing.T) {
+	var al source.AddressLatestResult
+	require.Nil(t, al.ReflectedBlock)
+
+	var ab source.AddressAtBlockResult
+	require.Nil(t, ab.ReflectedBlock)
+
+	var sn source.SnapshotResult
+	require.Nil(t, sn.ReflectedBlock)
+}
+
+func TestAddressLatestResult_ReflectedBlockSettable(t *testing.T) {
+	refl := chain.NewBlockNumber(150_000_000)
+	r := source.AddressLatestResult{
+		ReflectedBlock: &refl,
+	}
+	require.NotNil(t, r.ReflectedBlock)
+	require.Equal(t, uint64(150_000_000), r.ReflectedBlock.Uint64())
+}

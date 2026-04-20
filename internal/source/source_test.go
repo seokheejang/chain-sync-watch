@@ -15,8 +15,8 @@ import (
 // interface, this file fails to compile. That's the point.
 type dummySource struct{}
 
-func (dummySource) ID() source.SourceID       { return "dummy" }
-func (dummySource) ChainID() chain.ChainID    { return chain.OptimismMainnet }
+func (dummySource) ID() source.SourceID             { return "dummy" }
+func (dummySource) ChainID() chain.ChainID          { return chain.OptimismMainnet }
 func (dummySource) Supports(source.Capability) bool { return false }
 
 func (dummySource) FetchBlock(context.Context, source.BlockQuery) (source.BlockResult, error) {
@@ -33,6 +33,22 @@ func (dummySource) FetchAddressAtBlock(context.Context, source.AddressAtBlockQue
 
 func (dummySource) FetchSnapshot(context.Context, source.SnapshotQuery) (source.SnapshotResult, error) {
 	return source.SnapshotResult{}, source.ErrUnsupported
+}
+
+func (dummySource) FetchERC20Balance(context.Context, source.ERC20BalanceQuery) (source.ERC20BalanceResult, error) {
+	return source.ERC20BalanceResult{}, source.ErrUnsupported
+}
+
+func (dummySource) FetchERC20Holdings(context.Context, source.ERC20HoldingsQuery) (source.ERC20HoldingsResult, error) {
+	return source.ERC20HoldingsResult{}, source.ErrUnsupported
+}
+
+func (dummySource) FetchInternalTxByTx(context.Context, source.InternalTxByTxQuery) (source.InternalTxResult, error) {
+	return source.InternalTxResult{}, source.ErrUnsupported
+}
+
+func (dummySource) FetchInternalTxByBlock(context.Context, source.InternalTxByBlockQuery) (source.InternalTxResult, error) {
+	return source.InternalTxResult{}, source.ErrUnsupported
 }
 
 // Compile-time check. If Source grows or loses a method, this line

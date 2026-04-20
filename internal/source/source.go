@@ -59,4 +59,25 @@ type Source interface {
 	// semantics differ per source (see docs/research/source-shapes.md);
 	// judgement over snapshots is observational by default.
 	FetchSnapshot(ctx context.Context, q SnapshotQuery) (SnapshotResult, error)
+
+	// FetchERC20Balance returns a single-token balance for an address
+	// at the query's Anchor. Tier C — RPC adapters serve it via
+	// eth_call to balanceOf(), 3rd-party indexers via cached reads.
+	// Adapters that cannot honour a numeric anchor on this call must
+	// return ErrUnsupported rather than silently fall back to latest.
+	FetchERC20Balance(ctx context.Context, q ERC20BalanceQuery) (ERC20BalanceResult, error)
+
+	// FetchERC20Holdings returns every ERC-20 balance held by an
+	// address at the query's Anchor. Tier B — canonical only from
+	// indexers; RPC-backed adapters return ErrUnsupported.
+	FetchERC20Holdings(ctx context.Context, q ERC20HoldingsQuery) (ERC20HoldingsResult, error)
+
+	// FetchInternalTxByTx returns the internal-call trace for one
+	// transaction. Tier C — RPC via debug_traceTransaction (archive
+	// required), indexers via their trace cache.
+	FetchInternalTxByTx(ctx context.Context, q InternalTxByTxQuery) (InternalTxResult, error)
+
+	// FetchInternalTxByBlock returns every internal call recorded in a
+	// block across all of its transactions. Tier C.
+	FetchInternalTxByBlock(ctx context.Context, q InternalTxByBlockQuery) (InternalTxResult, error)
 }
