@@ -74,12 +74,13 @@
 - `tol_back = 0` (과거 상태 역반영은 허용 안 함)
 - `tol_fwd = 64 블록` (≈ 2분 / Optimism 2s block time)
 
-**reflected-block 메타 확인 상태**:
-- Blockscout `GET /addresses/{addr}` → `block_number_balance_updated_at` **있음 (확인됨)**
-- Blockscout `GET /addresses/{addr}/token-balances` → ⚠️ 확인 필요 (Open Q)
-- Blockscout `/stats` → 응답 timestamp만, 블록 메타 없음 → 관찰 전용
-- Routescan `account/*` → ⚠️ 확인 필요 (Open Q)
-- Routescan `account/balancehistory` (archive) → blockno 입력 시 정확 반영 기대 (미검증)
+**reflected-block 메타 확인 상태 (2026-04-20 curl 실측)**:
+- Blockscout `GET /addresses/{addr}` → ✅ `block_number_balance_updated_at` (native coin_balance 기준)
+- Blockscout `GET /addresses/{addr}/token-balances` → ❌ per-item 필드 없음. Workaround: `/addresses/{addr}` 선행 호출로 inferred reflected_block 획득 (인덱서 원자성 가정, API 보증 아님)
+- Blockscout `GET /addresses/{addr}/internal-transactions` → ✅ 각 item에 `block_number` + `timestamp` (event 기준 블록)
+- Blockscout `/stats` → 응답 timestamp만, 블록 메타 없음 → **관찰 전용** (자동 judgement 없음)
+- Routescan `account/balance`, `tokenbalance`, `addresstokenbalance` → ❌ 메타 없음 → anchor window **불가**, `ReflectedBlock = nil`로 표기
+- Routescan `account/balancehistory` → ✅ blockno 파라미터 자체가 anchor (요청 시점 고정) — Tier A/C fallback 경로로 사용 가능
 
 **finalized 정의** (Optimism L2):
 - L2 `finalized` tag = L1에 배치 제출·challenge window 통과한 블록. 7일 challenge window (Fault Proof 이전) or 짧아진 window (Fault Proof 이후).
@@ -118,6 +119,8 @@ Phase 2 기존 Capability + 사용자 요구 추가 반영:
 ---
 
 ## 실측 커버리지 매트릭스
+
+2026-04-20 curl 검증 후 confirmed 표기. 세부 헤더·응답 스키마는 하위 "Open Questions 우선순위 A" 체크리스트 참조.
 
 | 지표 | User RPC (archive) | Blockscout v2 REST | Routescan (Etherscan-compat) | Etherscan V2 (paid req'd for OP) | Alchemy (free tier) |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -163,7 +166,7 @@ Phase 2 기존 Capability + 사용자 요구 추가 반영:
 | 주소 상세 | `GET /api/v2/addresses/{addr}` | coin_balance, block_number_balance_updated_at, is_contract, has_tokens, has_logs, has_token_transfers, implementations, token (if contract) |
 | 주소의 **ERC-20 holdings** | `GET /api/v2/addresses/{addr}/token-balances` | Array: [{token, token_id, token_instance, value}] — 확인됨 248개 반환 |
 | 주소의 tx 목록 | `GET /api/v2/addresses/{addr}/transactions` | items[], next_page_params |
-| 주소의 internal tx | `GET /api/v2/addresses/{addr}/internal-transactions` | ⚠️ 확인 필요 (존재 여부) |
+| 주소의 internal tx | `GET /api/v2/addresses/{addr}/internal-transactions` | ✅ 존재 확인. items: {block_number, block_index, transaction_hash, from, to, value, type, gas_limit, error, success, timestamp, index, transaction_index}, `next_page_params`로 페이징 |
 | 트랜잭션 상세 | `GET /api/v2/transactions/{hash}` | hash, block_number, from, to, value, gas_used, status, method |
 | 트랜잭션의 internal tx | `GET /api/v2/transactions/{hash}/internal-transactions` | items[] — 트랜잭션별 internal call |
 | ERC-20 토큰 목록 | `GET /api/v2/tokens?type=ERC-20` | items[], next_page_params (페이징 total 확인 가능) |
@@ -176,9 +179,12 @@ Phase 2 기존 Capability + 사용자 요구 추가 반영:
 - `action=eth_getBlockByNumber&tag=0x..&boolean=false` — full 블록 헤더 (all roots 포함)
 - `action=eth_getBalance&address=..&tag=0x..` — balance at block
 
-#### 관찰된 rate limit
-- Cloudflare 기반, `x-ratelimit-limit: 600` / `x-ratelimit-reset` 동적 (2~3h+)
-- `bypass-429-option: temporary_token` 제공 → 별도 토큰으로 상향 가능 (정확한 절차 확인 필요)
+#### 관찰된 rate limit (2026-04-20 curl 실측 갱신)
+- `x-ratelimit-limit: 600`
+- `x-ratelimit-reset`: **ms 단위** 잔여. 연속 호출 시 3.3초 wall-clock에 reset 값이 3332ms 감소 관찰 → **window ≈ 60초**
+- 실측 한도: **10 req/s sustained** (600 / 60s). 기존 2~3h+ 추정은 오류 (reset unit 오해)
+- `access-control-expose-headers`에 `bypass-429-option, x-ratelimit-reset, x-ratelimit-limit, x-ratelimit-remaining, api-v2-temp-token`
+- `bypass-429-option: temporary_token` 메커니즘 활성 — 실제 토큰은 429 히트 시점에 `api-v2-temp-token` 헤더로 발급될 것으로 추정, 공식 문서 확인 또는 어댑터 구현 시 실험 필요
 
 ---
 
@@ -197,7 +203,7 @@ Phase 2 기존 Capability + 사용자 요구 추가 반영:
 | 최신 블록 번호 | `?module=proxy&action=eth_blockNumber` |
 | 블록 상세 | `?module=proxy&action=eth_getBlockByNumber&tag=0x..&boolean=false` |
 | balance | `?module=account&action=balance&address=..&tag=latest` |
-| balance at block | `?module=account&action=balancehistory&address=..&blockno=N` (확인 필요) |
+| balance at block | `?module=account&action=balancehistory&address=..&blockno=N` ✅ Optimism free 동작 확인 (2026-04-20) |
 | 다수 balance | `?module=account&action=balancemulti&address=A,B,C&tag=latest` |
 | tx 목록 | `?module=account&action=txlist&address=..&startblock=..&endblock=..` |
 | **internal tx (by address)** | `?module=account&action=txlistinternal&address=..` |
@@ -209,18 +215,19 @@ Phase 2 기존 Capability + 사용자 요구 추가 반영:
 | ERC-721 transfer 목록 | `?module=account&action=tokennfttx&address=..` |
 | gas oracle | `?module=gastracker&action=gasoracle` |
 | ETH supply | `?module=stats&action=ethsupply` |
-| ??? total_addresses / total_txs | ⚠️ **Etherscan-compat엔 직접 매칭 없음** — `stats` 모듈 내 다른 action 존재 여부 조사 필요 |
+| total_addresses / total_txs | ❌ **action 없음 (2026-04-20 확인)** — `stats` 모듈은 `ethsupply`/`tokensupply`/`ethprice`만. chain-wide stats는 Blockscout 전담 |
 | 토큰 total supply | `?module=stats&action=tokensupply&contractaddress=..` |
 
-#### 관찰된 rate limit
-- 최신 기준 **5 calls/sec, 100,000/day** (Etherscan free가 Optimism 잘라낸 뒤 강화)
-- 과거엔 2 req/s, 10k/day 이었음
+#### 관찰된 rate limit (2026-04-20 curl 실측)
+- 응답 헤더: `x-ratelimit-rpm-limit: 120` / `x-ratelimit-rpd-limit: 10000`
+- 즉 **분당 120 (= 2 req/s), 일 10,000** — 공식 "5 req/s, 100k/day" 문구와 차이 있음 (정책 다운그레이드 또는 IP별 기본 티어?)
 - 키·가입 불필요
+- Conservative 어댑터 설정 권장: **2 req/s** (observed 기준), 일 10k
 
-#### 알려진 제약
-- **chain stats (total_addresses, total_transactions 등)**: Etherscan-compat 스키마엔 공식 action이 없음 → **조사 TODO**
-- 결론 가능성: "Routescan은 block/tx/account/토큰 지표는 강하지만 chain-wide cumulative stats는 약함"
-- 이 경우 **Blockscout**이 snapshot 카테고리의 유일한 공급자 (free)
+#### 알려진 제약 (2026-04-20 확정)
+- **chain stats**: `stats` 모듈에 chain-wide 카운터 action 없음 — **Blockscout이 `snapshot.total_*` 카테고리의 유일 공급자**
+- **응답 reflected-block 메타 0**: `account/balance`, `tokenbalance`, `addresstokenbalance` 모두 값(result 문자열)만 반환. Tier B anchor window 불가 → 해당 Capability에서 Routescan은 `Supports()=false` 또는 "관찰 전용"
+- **스팸 토큰 필터링 없음**: `addresstokenbalance` 응답에 airdrop 스팸/피싱 토큰(이름·심볼에 URL/claim 문구 포함) 그대로 포함. 저장·비교 시 반드시 cross-check(Blockscout `is_scam`/`reputation`) 또는 allowlist 필터 적용. **피싱 URL은 fixture·log·memory에 저장 금지**.
 
 ---
 
@@ -332,14 +339,25 @@ Auth: `&apikey=XXX` 쿼리 파라미터
 
 ### 우선순위 A (Phase 3 전 반드시)
 
-- [ ] **Routescan 체인 통계**: `total_addresses`, `total_transactions`, `total_blocks` 조회 가능한 action 존재하는지? Etherscan-compat 스키마에 `stats` 모듈 action 전체 목록 확인 필요
-- [ ] **Routescan `balancehistory` (archive)**: Optimism free tier에서 historical balance 조회 실제 동작하는지 (Etherscan free에선 PRO 전용)
-- [ ] **Blockscout `address/internal-transactions`**: REST v2에 이 엔드포인트 공식 존재 여부 (현재 미확인)
-- [ ] **Blockscout rate limit 정확 window**: 600 한도의 실제 창 (1h? 2h? rolling?) — 공식 문서 확인 or bypass-429 토큰 취득 절차
-- [ ] **reflected-block 메타 존재 여부** (Tier B anchor 전략 전제):
-  - Blockscout `/addresses/{addr}/token-balances` 응답에 `block_number_balance_updated_at` 또는 유사 필드 있는지
-  - Routescan `account/balance`, `account/tokenbalance`, `account/addresstokenbalance` 응답에 반영 블록 메타 있는지
-  - 없으면 해당 엔드포인트는 검증 대상 제외 (관찰만)
+**2026-04-20 curl 검증 완료**. 하위 체크리스트는 완료 + 결과 요약.
+
+- [x] **Routescan 체인 통계** → ❌ **action 없음**. `stats` 모듈은 `ethsupply`/`tokensupply`/`ethprice`만 존재. `chainsupply`·`nodecount`는 "Missing Or invalid Action". **결론**: `total_addresses`/`total_transactions`/`total_blocks`는 **Blockscout이 유일 공급자**.
+- [x] **Routescan `balancehistory` (archive)** → ✅ **Optimism free에서 동작**. `?module=account&action=balancehistory&address=..&blockno=N` → native balance 반환. Etherscan free는 PRO 전용이지만 Routescan은 open. **Tier A/C fallback 가치 높음** (우리 archive RPC 없을 때 보조 경로).
+- [x] **Blockscout `/addresses/{addr}/internal-transactions`** → ✅ **존재 확인**. 응답 스키마: `{items: [...], next_page_params}`. per-item: `block_number`, `block_index`, `transaction_hash`, `from`, `to`, `value`, `type` (call/delegatecall/create/...), `gas_limit`, `error`, `success`, `timestamp`, `index`, `transaction_index`, `created_contract`. `next_page_params`: `{index, block_number, transaction_index, items_count}`.
+- [x] **Blockscout rate limit window**:
+  - `x-ratelimit-limit: 600`
+  - `x-ratelimit-reset`: **ms 단위** 잔여 (3.3초 wall-clock에 reset 값이 3332ms 감소 관찰)
+  - **window ≈ 60 초**, 즉 실측 **10 req/s sustained** (기존 5 req/s 추정의 2배 — conservative default 유지 권장)
+  - `bypass-429-option: temporary_token` + `api-v2-temp-token` 헤더 **expose** 확인. 실제 토큰은 429 히트 시점에 발급될 것으로 추정 — 취득 절차는 별도 실험 필요(Phase 3 어댑터 구현 시)
+- [x] **reflected-block 메타**:
+  - **Blockscout `/addresses/{addr}`** → ✅ `block_number_balance_updated_at` 필드 존재 (native coin_balance 반영 블록)
+  - **Blockscout `/addresses/{addr}/token-balances`** → ❌ **per-item 필드 없음**. items = `{token, token_id, token_instance, value}`만. **Workaround**: 같은 주소 `/addresses/{addr}` 선행 호출 → `block_number_balance_updated_at`를 proxy reflected_block으로 사용 (Blockscout 인덱서 원자성 가정 — **API 보증 아님**, "inferred" 표기)
+  - **Routescan `account/balance`, `tokenbalance`, `addresstokenbalance`** → ❌ **전부 값(result 문자열)만**, 블록 메타 없음. **Tier B anchor window 전략 불가** → Routescan 대응 Capability는 `Supports() = false` 또는 `ReflectedBlock = nil` + "관찰 전용"
+- [x] **부수 발견 — 스팸 토큰 필터링**:
+  - Routescan `addresstokenbalance`: 응답에 airdrop 스팸/피싱 토큰 필터링 없음 (이름·심볼에 외부 URL·claim 문구 포함된 가짜 토큰들 그대로 반환). 피싱 URL을 fixture·로그에 저장 금지.
+  - Blockscout: 주소·토큰에 `reputation` + `is_scam` 필드 제공 → 자체 필터 사용 가능.
+  - 검증 정책: `is_scam=true` 또는 `reputation != "ok"` 토큰은 비교 대상에서 **제외** 권장 (Phase 4 Judgement 레이어). 스팸으로 인한 cross-source 자동 false positive 방지.
+- [x] **부수 발견 — Blockscout token metadata**: `/addresses/{addr}` 응답에 `has_tokens`/`has_token_transfers`/`has_logs`/`has_beacon_chain_withdrawals` boolean flag 제공 → capability 부분 pre-check 가능. `token.holders_count` 필드도 snapshot 검증 보조 지표로 활용 가능.
 
 ### 우선순위 B (가능하면)
 

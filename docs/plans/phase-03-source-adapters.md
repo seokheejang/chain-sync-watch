@@ -24,6 +24,26 @@ Phase 2에서 정의한 `Source` 포트의 **독립 패키지 번들 구현체**
 
 응답 메타도 없고 at-block 지원도 없는 "latest only 고아 지표"는 어댑터 **초기 구현에서 제외**. 명확한 기준으로 검증 가능한 지표부터 채움.
 
+### 소스별 policy (2026-04-20 curl 검증 반영)
+
+[docs/research/external-api-coverage.md](../research/external-api-coverage.md) "Open Questions 우선순위 A" 결과 기반:
+
+- **Routescan**:
+  - `account/balance`, `tokenbalance`, `addresstokenbalance` → 응답에 reflected-block 메타 **없음** → 해당 Capability `Supports()=false` 또는 `ReflectedBlock=nil` + "관찰 전용"으로 표기
+  - `account/balancehistory` → Optimism free 동작 확인 → `CapBalanceAtBlock` `Supports()=true`
+  - `stats` 모듈에 chain-wide action 없음 → `snapshot.total_addresses/transactions/contracts/erc20_token_count` 전부 `Supports()=false`
+  - **스팸 토큰 필터 필수**: `addresstokenbalance` 결과에 `is_scam`/reputation 기반 cross-check 없으면 Blockscout token 조회로 보강하거나 judgement 대상 제외
+
+- **Blockscout**:
+  - `/addresses/{addr}` → native `coin_balance`에 `block_number_balance_updated_at` 필드 → `ReflectedBlock` 채우기
+  - `/addresses/{addr}/token-balances` → per-item reflected_block 없음 → 동일 주소의 `/addresses/{addr}` 선행 호출하여 inferred reflected_block 채움. 어댑터 주석에 "inferred, not API-guaranteed" 명시
+  - `/addresses/{addr}/internal-transactions` → item별 `block_number` + `timestamp` 있음 → Tier C Capability 지원
+  - rate limit 실측 **10 req/s sustained** (600 / 60s window) — 기본값은 보수적으로 5 req/s, 429 발생 시 `api-v2-temp-token` 확인 로직 추가
+
+- **내부 ethscan 공통 client** (`adapters/internal/ethscan/`):
+  - Etherscan-compat 응답 중 `result` 필드가 값(문자열)만 오는 케이스는 `ReflectedBlock=nil`로 마킹
+  - Blockscout proxy 모듈도 동일 스키마 → 같은 client로 처리
+
 ## ⚠️ 2026-04-18 업데이트 — Etherscan 후순위 + Routescan 추가
 
 외부 API 조사(`docs/research/external-api-coverage.md`) 결과 초안 구성 변경:
