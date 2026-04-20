@@ -52,11 +52,16 @@ type DiffID string
 // Application 레이어가 persistence 에 노출하는 읽기 모델.
 // Discrepancy + Judgement + metadata 합성.
 type DiffRecord struct {
-    ID          DiffID
-    Discrepancy diff.Discrepancy
-    Judgement   diff.Judgement
-    Resolved    bool
-    ResolvedAt  *time.Time
+    ID             DiffID
+    Discrepancy    diff.Discrepancy
+    Judgement      diff.Judgement
+    Resolved       bool
+    ResolvedAt     *time.Time
+
+    // 2026-04-20 확장 — Tier/Anchor 메타 (Phase 2C + Phase 4 Tolerance 대응)
+    Tier           source.Tier              // 비교한 Capability의 Tier (A/B/C)
+    AnchorBlock    chain.BlockNumber        // Run이 고정한 anchor block
+    SamplingSeed   *int64                   // Tier B 샘플링 run 재현용 (Random strategy 등)
 }
 
 type JobID string
@@ -103,6 +108,14 @@ type Clock interface {
 // tip block 조회용 (샘플링에 필요)
 type ChainHead interface {
     Tip(ctx context.Context, chainID chain.ChainID) (chain.BlockNumber, error)
+    // 2026-04-20: anchor 고정용. Optimism는 finalized tag 직접 지원.
+    Finalized(ctx context.Context, chainID chain.ChainID) (chain.BlockNumber, error)
+}
+
+// Tier B rate-limit budget (상세 정의는 Phase 7)
+type RateLimitBudget interface {
+    Reserve(ctx context.Context, source source.SourceID, n int) error
+    Refund(ctx context.Context, source source.SourceID, n int) error
 }
 ```
 
@@ -125,16 +138,29 @@ type ChainHead interface {
 **동작**:
 1. `RunRepository.FindByID`
 2. `Run.Start()` → `RunRepository.Save` (status=running)
-3. 샘플링: `ChainHead.Tip` → `SamplingStrategy.Blocks()` → 블록 리스트
-4. 각 블록 × 각 Metric × 각 Source에 대해 병렬 조회
-   - Source가 Metric 미지원이면 skip
-   - 에러(rate limit, unavailable) 시 backoff 후 재시도, 재시도 한도 초과 시 해당 조합만 skip + 로그
-5. 블록·Metric·Subject별로 소스 결과 비교
-   - 모두 일치 → 아무것도 저장하지 않거나 "agreement" 로그만
-   - 불일치 → `Discrepancy` 생성 → `diff.JudgementPolicy.Judge` → `DiffRepository.Save`
-6. `Run.Complete()` 또는 `Run.Fail(err)` → `RunRepository.Save`
+3. **Anchor 고정**: `ChainHead.Finalized()` 호출로 finalized block 획득 → Run의 모든 조회가 이 anchor 기준 ([phase-04](./phase-04-verification-diff-domain.md) `CompareContext.AnchorBlock`)
+4. **Tier별 분기** (2026-04-20 확장):
+   - Tier A Capability → **전수 모드**: `SamplingStrategy.Blocks()` 그대로. RPC 중심 조회, budget 체크 스킵
+   - Tier B Capability → **샘플링 모드**: 4-stratum (known / top-N / random / recently-active) 주소 세트 + anchor 시점 latest 호출. `RateLimitBudget.Reserve()` 필수, `ErrBudgetExhausted` 시 config policy(`skip`/`defer`/`fail`)에 따라 분기
+   - Tier C Capability → Metric의 policy 설정 따라 A 또는 B처럼 동작
+5. 각 (블록|주소) × Metric × Source 병렬 조회
+   - `Source.Supports(cap)=false` → skip
+   - `ErrUnsupportedAtBlock` → 해당 (source, metric) 조합 skip + 로그
+   - rate limit / unavailable → backoff 재시도, 한도 초과 시 skip + `RateLimitBudget.Refund()`
+6. 응답 수집 후 `ValueSnapshot`으로 정규화 (ReflectedBlock 메타 포함)
+7. 비교: Metric의 `Tolerance.Judge(a, b, metric, ctx)` 호출
+   - `needDiscard=true` → 샘플 폐기, diff 저장 안 함
+   - `ok=false` → `Discrepancy` 생성 → `diff.JudgementPolicy.Judge` → `DiffRepository.Save` (Tier/AnchorBlock/SamplingSeed 포함)
+8. `Run.Complete()` 또는 `Run.Fail(err)` → `RunRepository.Save`
 
 **병렬성**: per-block × per-metric × per-source → `errgroup` 기반, 동시성 상한 (rate limit과 별개)
+
+**샘플링 4-stratum 세부** (Tier B 전용):
+- `known`: config 주입 (bridge, DEX, treasury 주소)
+- `top-N`: Tier B 자체 질의로 획득 (예: Blockscout `/addresses?sort=balance`)
+- `random`: seed 고정 — `Random{Seed: X}`와 동일 방식, 재현성
+- `recently-active`: **RPC**의 `eth_getBlockByNumber` + tx `from`/`to` 추출 (indexer 결과 의존 금지 — 편향 방지)
+- 수집한 union set에 대해 샘플링 실행. seed는 `DiffRecord.SamplingSeed`에 기록.
 
 ### `QueryRuns` / `QueryDiffs` / `ReplayDiff`
 - 조회는 단순 위임
@@ -165,6 +191,11 @@ type ChainHead interface {
 - [ ] 모든 소스 실패 → run=failed
 - [ ] Cancelled 상태로 변경되면 중단
 - [ ] 샘플링 Blocks가 빈 리스트 → 즉시 completed, diff 0건
+- [ ] **Tier 분기**: Run에 Tier A Capability만 있으면 budget 체크 없음, Tier B 있으면 `Reserve` 호출
+- [ ] **Anchor window discard**: Tier B 샘플 중 `ReflectedBlock`이 window 밖 → discrepancy 저장 안 됨
+- [ ] **`ErrUnsupportedAtBlock`**: anchor numeric인데 소스 미지원 → 해당 (source, metric) skip
+- [ ] **`ErrBudgetExhausted`**: config `budget.exhausted_policy=skip` 시 남은 metric skip, `=fail` 시 run 실패
+- [ ] **SamplingSeed 재현성**: 같은 seed로 ReplayDiff → 같은 샘플 세트 생성 확인
 
 ### 5.4 `QueryRuns` / `QueryDiffs` / `ReplayDiff` 테스트
 - [ ] 필터링, 페이징

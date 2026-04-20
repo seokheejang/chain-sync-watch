@@ -188,6 +188,8 @@ func mapError(err error) error {
 
 ### 8.3 `/diffs` 라우트
 - [ ] 동일한 패턴
+- [ ] **응답 DTO에 Tier 메타 노출**: `GET /diffs/{id}`는 `DiffRecord.Tier`, `AnchorBlock`, `SamplingSeed` + 각 `values[source]`의 `reflected_block` 필드 포함 (frontend가 anchor window 시각화 + 재현 UI 제공)
+- [ ] 필터 파라미터에 `tier` 추가: `GET /diffs?tier=A` / `tier=B` / `tier=C`
 - [ ] 구현
 
 ### 8.4 `/schedules` 라우트
@@ -195,7 +197,31 @@ func mapError(err error) error {
 - [ ] 구현
 
 ### 8.5 `/sources` 라우트
-- [ ] 현재 연결된 소스 목록 + Capability 노출
+- [ ] 현재 연결된 소스 목록 + Capability 노출 (**Tier 포함** — frontend 필터·배지 용도)
+- [ ] 응답 예시:
+  ```json
+  {
+    "sources": [
+      {
+        "id": "rpc",
+        "chain_id": 10,
+        "capabilities": [
+          { "name": "block.hash",                "tier": "A" },
+          { "name": "address.balance_at_block",  "tier": "A" },
+          { "name": "trace.internal_tx_by_tx",   "tier": "C" }
+        ]
+      },
+      {
+        "id": "blockscout",
+        "chain_id": 10,
+        "capabilities": [
+          { "name": "snapshot.total_addresses",      "tier": "B" },
+          { "name": "address.erc20_holdings_at_latest", "tier": "B" }
+        ]
+      }
+    ]
+  }
+  ```
 - [ ] 구현
 
 ### 8.6 `/healthz` / `/readyz`

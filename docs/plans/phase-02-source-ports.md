@@ -216,3 +216,233 @@ var (
 - [Hexagonal ports & adapters](https://alistair.cockburn.us/hexagonal-architecture/)
 - [Go `database/sql` driver pattern](https://pkg.go.dev/database/sql/driver)
 - [Interface Segregation Principle](https://en.wikipedia.org/wiki/Interface_segregation_principle)
+
+---
+
+# Phase 2C — Capability 확장 + Tier 체계 + Anchor BlockTag (2026-04-20 추가)
+
+Phase 3 어댑터 구현 **전** 진행. research doc 추가 합의사항 반영.
+
+## 배경
+
+[docs/research/external-api-coverage.md](../research/external-api-coverage.md) "검증 Tier 분류" 및 "추가 합의 (2026-04-20)" 섹션 참조. 요약:
+
+- **3-tier 모델**: A(RPC-canonical 전수) / B(Indexer-derived 샘플링) / C(Mixed).
+- **anchor 전략**: finalized 고정 + 응답 메타 기반 사후 대조.
+- **지표 우선순위 원칙**: `at block N` 또는 `startblock/endblock` 같이 기준 명확한 쿼리 우선. latest-only는 후순위.
+
+이를 반영해 `source/` 포트를 확장한다.
+
+## 산출물 (DoD)
+
+- [ ] `internal/source/capability.go` — Tier B 신규 Capability 4개 + 각 Capability에 `Tier()` 메타 부여
+- [ ] `internal/source/tier.go` — `Tier` enum (A/B/C)
+- [ ] `internal/source/blocktag.go` — `BlockTag` 공통 값객체
+- [ ] 기존 Query 타입들에 `Anchor BlockTag` 필드 추가 (2.x 호환 위해 default = `BlockTagLatest`)
+- [ ] `internal/source/result.go` — Result에 `ReflectedBlock *chain.BlockNumber` 메타 필드 추가 (anchor 사후 대조용)
+- [ ] Tier B 대응 Query/Result 4종 추가 (ERC-20 balance/holdings, internal tx by block/tx)
+- [ ] `internal/source/fake/` — 신규 Capability + BlockTag 처리 확장
+- [ ] 블랙박스 테스트 갱신
+
+## 설계
+
+### `Tier` 분류
+
+```go
+// internal/source/tier.go
+type Tier uint8
+
+const (
+    TierA Tier = iota + 1  // RPC-canonical (전수 가능, RPC가 정답)
+    TierB                  // Indexer-derived (cross-indexer 샘플링만)
+    TierC                  // Mixed (RPC/3rd-party 양쪽, 지표별 결정)
+)
+
+func (c Capability) Tier() Tier { /* 표에서 조회 */ }
+```
+
+**Capability → Tier 매핑 (초안)**:
+
+| Capability | Tier |
+|---|---|
+| `block.*` (hash, parent, timestamp, roots, miner, gas, tx_count) | A |
+| `address.balance_at_block`, `address.nonce_at_block` | A |
+| `address.balance_at_latest`, `address.nonce_at_latest`, `address.tx_count_at_latest` | A |
+| `snapshot.total_addresses`, `snapshot.total_txs`, `snapshot.total_contracts`, `snapshot.erc20_token_count` | B |
+| `address.erc20_balance_at_latest` (특정 토큰) | C |
+| `address.erc20_holdings_at_latest` (보유 전체 목록) | B |
+| `trace.internal_tx_by_tx`, `trace.internal_tx_by_block` | C |
+
+### `BlockTag` — 공통 anchor
+
+```go
+// internal/source/blocktag.go
+type BlockTag struct {
+    kind BlockTagKind
+    num  chain.BlockNumber // kind == Numeric 때만 유효
+}
+
+type BlockTagKind uint8
+
+const (
+    BlockTagLatest BlockTagKind = iota
+    BlockTagSafe
+    BlockTagFinalized
+    BlockTagNumeric
+)
+
+func BlockTagAt(n chain.BlockNumber) BlockTag { /* ... */ }
+func (b BlockTag) String() string             { /* "latest"|"safe"|"finalized"|"0x..." */ }
+```
+
+**원칙**:
+- 모든 Query에 `Anchor BlockTag` 필드. 기본값 `BlockTagLatest`와 의미 같지만 명시적으로 선언.
+- Tier A 검증은 보통 `BlockTagNumeric` 또는 `BlockTagFinalized` 사용.
+- Tier B는 어댑터가 `at block` 지원 안 하면 **`ErrUnsupportedAtBlock` 반환** → caller(verification use case)가 reflected-block 메타로 사후 대조 분기.
+
+### Result 메타 확장
+
+```go
+// 모든 Result 공통 embed 구조
+type ResultMeta struct {
+    SourceID       SourceID
+    FetchedAt      time.Time
+    Anchor         BlockTag            // 요청 시 anchor
+    ReflectedBlock *chain.BlockNumber  // 응답이 실제 반영하는 블록 (메타 없으면 nil)
+    RawResponse    []byte              // config on/off
+}
+```
+
+`ReflectedBlock`이 nil인 Tier B 응답 = "관찰 전용" 판정 (자동 diff 대상 제외).
+
+### 신규 Capability (2C 추가분)
+
+```go
+// Per-address ERC-20
+CapERC20BalanceAtLatest  Capability = "address.erc20_balance_at_latest"   // Tier C
+CapERC20HoldingsAtLatest Capability = "address.erc20_holdings_at_latest"  // Tier B
+
+// Internal transactions (debug_trace 대체)
+CapInternalTxByBlock Capability = "trace.internal_tx_by_block"            // Tier C
+CapInternalTxByTx    Capability = "trace.internal_tx_by_tx"               // Tier C
+```
+
+### 신규 Query / Result
+
+```go
+type ERC20BalanceQuery struct {
+    Address      chain.Address
+    TokenAddress chain.Address
+    Anchor       BlockTag
+}
+type ERC20BalanceResult struct {
+    Balance  *big.Int
+    Decimals uint8
+    Meta     ResultMeta
+}
+
+type ERC20HoldingsQuery struct {
+    Address chain.Address
+    Anchor  BlockTag
+}
+type ERC20HoldingsResult struct {
+    Tokens []TokenHolding
+    Meta   ResultMeta
+}
+type TokenHolding struct {
+    Contract chain.Address
+    Name     string
+    Symbol   string
+    Decimals uint8
+    Balance  *big.Int
+}
+
+// internal tx: "범위/식별자 기준" — at-block anchor 필요 없음 (startblock/endblock 또는 txhash로 고정)
+type InternalTxByBlockQuery struct {
+    Block chain.BlockNumber
+}
+type InternalTxByTxQuery struct {
+    TxHash chain.Hash32
+}
+type InternalTxResult struct {
+    Traces []InternalTx
+    Meta   ResultMeta
+}
+type InternalTx struct {
+    From, To chain.Address
+    Value    *big.Int
+    GasUsed  uint64
+    CallType string  // "call", "delegatecall", "create", ...
+    Error    string
+}
+```
+
+### `Source` 인터페이스 확장
+
+```go
+type Source interface {
+    // 기존
+    ID() SourceID
+    ChainID() chain.ChainID
+    Supports(Capability) bool
+    FetchBlock(context.Context, BlockQuery) (BlockResult, error)
+    FetchAddressLatest(context.Context, AddressQuery) (AddressLatestResult, error)
+    FetchAddressAtBlock(context.Context, AddressAtBlockQuery) (AddressAtBlockResult, error)
+    FetchSnapshot(context.Context, SnapshotQuery) (SnapshotResult, error)
+
+    // 2C 신규
+    FetchERC20Balance(context.Context, ERC20BalanceQuery) (ERC20BalanceResult, error)
+    FetchERC20Holdings(context.Context, ERC20HoldingsQuery) (ERC20HoldingsResult, error)
+    FetchInternalTxByBlock(context.Context, InternalTxByBlockQuery) (InternalTxResult, error)
+    FetchInternalTxByTx(context.Context, InternalTxByTxQuery) (InternalTxResult, error)
+}
+```
+
+**메서드 수가 늘어나면** Phase 3 이후에 `ERC20Reader`, `TraceReader` 등으로 분할(ISP) 검토.
+
+### 에러 확장
+
+```go
+var (
+    ErrUnsupportedAtBlock = errors.New("source: anchor at block not supported (latest only)")
+)
+```
+
+## 세부 단계 (TDD)
+
+### 2C.1 `Tier` + `Capability.Tier()`
+- [ ] 테스트: 각 Capability가 정의된 Tier 반환
+- [ ] 구현
+
+### 2C.2 `BlockTag`
+- [ ] 테스트: round-trip (`String` → parse), latest/safe/finalized/numeric 각 케이스
+- [ ] 구현
+
+### 2C.3 기존 Query 타입에 `Anchor` 필드 추가
+- [ ] zero value = `BlockTagLatest` 보장 (기존 테스트 불변)
+- [ ] 테스트 갱신
+
+### 2C.4 `ResultMeta` embed
+- [ ] 기존 Result들 meta 흡수
+- [ ] `ReflectedBlock` nil 처리 블랙박스 테스트
+
+### 2C.5 신규 Capability + Query/Result (4종)
+- [ ] 타입 선언 + 테스트
+- [ ] `Source` 인터페이스 확장
+
+### 2C.6 Fake 확장
+- [ ] 신규 메서드 4개 지원
+- [ ] `ErrUnsupportedAtBlock` 주입 가능
+- [ ] `ReflectedBlock` 주입 가능
+
+## 의존 Phase
+
+- Phase 2 완료 (기 구현된 포트 위에 확장)
+
+## 주의
+
+- **후방 호환성**: 기존 Query 타입에 `Anchor` 추가는 zero value 안전 (default latest). 기존 테스트·fake 사용처 영향 없음 원칙.
+- **`ResultMeta` 리팩터**: 모든 Result가 embed 구조로 변경됨 → 블랙박스 테스트 경로 명시적 갱신 필요.
+- **Tier C Capability의 실제 주체**: `CapERC20BalanceAtLatest`는 RPC eth_call도 가능, Blockscout REST도 가능. 어느 쪽을 primary로 할지는 어댑터 레벨 정책.
+- **L2 특이 필드는 포함 안 함** (백로그).
+- **indexer 측 Capability 선언**: Phase 3/4 이후 필요 시점에 도입. 2C 범위 아님.

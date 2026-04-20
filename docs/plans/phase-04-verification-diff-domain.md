@@ -115,14 +115,27 @@ var (
 
 ### 카테고리별 비교 정책
 
-| 카테고리 | 기본 Tolerance | 판정 정책 |
-|---|---|---|
-| `BlockImmutable` | `ExactMatch` (strict) | 1개라도 다르면 Critical, RPC를 trusted로 |
-| `AddressLatest` | `ExactMatch` | 다르면 Warning. "latest" 정의 차이(block height 차이) 가능성 메모 |
-| `AddressAtBlock` | `ExactMatch` | RPC 기반이라 Critical, RPC가 trusted |
-| `Snapshot` | `Observational` (판정 없음) | 기록만 — 소스별 "의미 정의" 달라 자동 판정 위험 |
+| 카테고리 | 주요 Tier | 기본 Tolerance | 판정 정책 |
+|---|---|---|---|
+| `BlockImmutable` | A | `ExactMatch` (strict) | 1개라도 다르면 Critical, RPC를 trusted로 |
+| `AddressLatest` | A (+ C 확장) | `AnchorWindowed(ExactMatch, tol_fwd=64)` | 다르면 Warning. anchor window 밖이면 샘플 discard |
+| `AddressAtBlock` | A | `ExactMatch` | RPC 기반이라 Critical, RPC가 trusted |
+| `Snapshot` | B (일부 C) | `Observational` or `AnchorWindowed` | reflected-block 메타 있으면 cross-check, 없으면 관찰만 |
 
-**이유**: 현장 관찰(내부 indexer vs Blockscout)에서 `totalAddressCount`가 21% 격차. 의미 정의 차이로 자동 Error 판정은 노이즈. Snapshot은 "관찰" 레이어로 대시보드에만 노출, diff로 저장은 하되 Judgement는 발급 안 함 (또는 Info만).
+**이유**: 현장 관찰(내부 indexer vs Blockscout)에서 `totalAddressCount`가 21% 격차. 의미 정의 차이로 자동 Error 판정은 노이즈. Snapshot 중 reflected-block 메타가 있는 지표(Blockscout address coin_balance 등)는 cross-check 가능하지만, 없는 지표(stats.total_*)는 대시보드 관찰만.
+
+### MetricCategory ↔ Tier 매핑 (2C 연계)
+
+[docs/research/external-api-coverage.md](../research/external-api-coverage.md) "검증 Tier 분류" + [phase-02-source-ports.md](./phase-02-source-ports.md) Phase 2C 참조.
+
+| MetricCategory | 대응 Tier | 전수/샘플링 | budget 필요 |
+|---|---|---|---|
+| `CatBlockImmutable` | A | 전수 (모든 finalized 블록) | ❌ 자체 RPC |
+| `CatAddressAtBlock` | A | 전수 또는 샘플링 (addr set × blocks) | ❌ 자체 RPC |
+| `CatAddressLatest` | A (기본) · C (ERC-20 holdings 등) | 샘플링 | Tier C는 3rd-party 경로 시 ✅ |
+| `CatSnapshot` | B (대부분) · C (일부) | 샘플링 | ✅ |
+
+Category는 "**무엇을 비교하나**", Tier는 "**어떻게 조달하나**". 둘은 orthogonal. `Metric`에 Tier 필드를 두지 않고 `source.Capability.Tier()`로 조회 (2C에서 정의됨) — Metric이 하나의 Capability를 참조하기 때문에 Tier도 거기서 파생.
 
 ### `SamplingStrategy`
 ```go
@@ -189,28 +202,58 @@ type Subject struct {
 }
 
 type ValueSnapshot struct {
-    Raw        string  // 문자열로 정규화해 보관
-    Typed      any     // 원래 타입 (uint64, *big.Int 등)
-    FetchedAt  time.Time
+    Raw            string                // 문자열로 정규화해 보관
+    Typed          any                   // 원래 타입 (uint64, *big.Int 등)
+    FetchedAt      time.Time
+    ReflectedBlock *chain.BlockNumber    // 응답이 반영하는 블록 (Tier B anchor window용, nil=미노출)
 }
 ```
 
 ### `Tolerance`
+
+2026-04-20 확장: Tier B의 latest-only 응답을 anchor block과 정합성 대조하기 위해 `ReflectedBlock` 메타를 판정에 포함.
+
 ```go
+// Tolerance 판정에 필요한 비교 컨텍스트
+type CompareContext struct {
+    Anchor         source.BlockTag              // Run이 고정한 anchor (보통 finalized block)
+    AnchorBlock    chain.BlockNumber            // Anchor 해석 결과 (numeric)
+    ReflectedA     *chain.BlockNumber           // a의 응답이 실제 반영하는 블록 (nil = 미노출)
+    ReflectedB     *chain.BlockNumber
+}
+
 type Tolerance interface {
-    Allows(a, b ValueSnapshot, metric verification.Metric) bool
+    // ok: 동등 판정, needDiscard: 샘플 자체를 버려야 함 (anchor window 밖)
+    Judge(a, b ValueSnapshot, metric verification.Metric, ctx CompareContext) (ok bool, needDiscard bool)
 }
 
 // 완전 일치 요구
 type ExactMatch struct{}
 
-// 수치 허용오차 (balance 등 대단위 수치에 유용 — 보통은 ExactMatch지만 유연성 확보)
+// 수치 허용오차 (balance 등 대단위 수치)
 type NumericTolerance struct {
-    AbsoluteMax *big.Int  // 절대 오차 상한
-    RelativePPM uint      // 부 단위 상대 오차 (parts per million)
+    AbsoluteMax *big.Int
+    RelativePPM uint
 }
+
+// Tier B 응답 대응: ReflectedBlock이 anchor window 안에 들어와야만 비교 유효
+type AnchorWindowed struct {
+    Inner  Tolerance               // ExactMatch / NumericTolerance / Observational
+    TolBack  uint64                // anchor - tol_back 이전 응답은 discard
+    TolFwd   uint64                // anchor + tol_fwd 이후 응답도 discard
+}
+// 기본값: tol_back=0, tol_fwd=64 (≈Optimism 2분)
+
+// 관찰 전용: 항상 ok=true, needDiscard=false. 자동 판정 안 함.
+type Observational struct{}
 ```
-MVP에선 대부분 `ExactMatch`이지만, 구조만 먼저 확보.
+
+**판정 흐름**:
+1. `AnchorWindowed`: 양측의 `ReflectedBlock`이 모두 `[anchor-tol_back, anchor+tol_fwd]`에 들어오는지 먼저 검사. 하나라도 밖이면 `needDiscard=true` → `Judgement` 발급 안 함 (discrepancy도 저장 X).
+2. 한쪽만 `ReflectedBlock=nil`이면 (소스가 메타 미노출) `Inner`에 위임하되, 기본 Policy가 trusted sources 결정 시 해당 소스 신뢰도 감점.
+3. 모두 통과 → `Inner.Judge()`로 실제 값 비교.
+
+MVP에선 대부분 `ExactMatch` 또는 `AnchorWindowed{Inner: ExactMatch}` 사용.
 
 ### `Judgement`
 ```go
@@ -276,6 +319,8 @@ type DefaultPolicy struct{}
 
 #### 4.6 `Tolerance`
 - [ ] 테스트: ExactMatch (일치/불일치), NumericTolerance (절대·상대 오차 경계값)
+- [ ] 테스트: `AnchorWindowed` — 양측 ReflectedBlock이 window 안/밖 조합 (4케이스), nil 처리
+- [ ] 테스트: `Observational` — 항상 ok=true, needDiscard=false
 - [ ] 구현
 
 #### 4.7 `Judgement` + `DefaultPolicy`

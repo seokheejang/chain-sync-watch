@@ -76,10 +76,14 @@ worker:
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 1, memory: 1Gi }
   queues:
-    default: 5
-    rpc: 5
-    blockscout: 3
-    etherscan: 3
+    # 2026-04-20: Tier 기반 큐 재설계 (phase-07-queue-scheduler.md)
+    default:      5
+    tier-a-rpc:   10   # Tier A 전수 (자체 RPC, 높은 처리량)
+    tier-b-3rd:    3   # Tier B 샘플링 (3rd-party + budget)
+    tier-c-mixed:  2   # Tier C (지표별 A/B 혼합)
+  # Tier B budget 정책 (RateLimitBudget port, Phase 7)
+  budget:
+    exhaustedPolicy: skip   # skip | defer | fail
 
 ingress:
   enabled: false

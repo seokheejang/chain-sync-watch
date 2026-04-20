@@ -179,3 +179,81 @@ func main() {
 - [asynqmon 대시보드](https://github.com/hibiken/asynqmon)
 - [asynq PeriodicTaskManager](https://github.com/hibiken/asynq/wiki/Periodic-Tasks)
 - [miniredis (테스트용)](https://github.com/alicebob/miniredis)
+
+---
+
+## 2026-04-20 추가 — Tier-aware 스케줄링 + Rate-limit Budget Port
+
+[docs/research/external-api-coverage.md](../research/external-api-coverage.md) "검증 Tier 분류" 및 "추가 합의 (2026-04-20)" 반영. Phase 7은 **Tier별 실행 정책**을 담당한다.
+
+### 실행 정책
+
+| Tier | 대상 Capability | 실행 모드 | 빈도 | 예산 제약 |
+|---|---|---|---|---|
+| A | RPC-canonical (block/tx/receipt/balance at block 등) | **전수** — finalized 블록 전부 | 매 finalized 배치 | 없음 (자체 노드) |
+| B | Indexer-derived (holdings, stats 등) | **샘플링** — 4-stratum | 예산 허용만큼 | rate-limit budget 상한 |
+| C | Mixed | 지표별 설정 (기본 Tier B처럼, 주기적 cross-check로 RPC 재구성) | 지표별 cron | 선택적 |
+
+샘플링 4-stratum (verification use case가 address 세트를 구성):
+- **known**: config에서 주입된 유명 주소 (bridge, DEX, treasury)
+- **top-N**: balance·tx count 상위 (Tier B 자체 질의로 획득)
+- **random**: 균등 샘플링 (verification seed로 재현 가능)
+- **recently-active**: 최근 N 블록에서 tx 등장 주소 (**RPC 블록에서 추출** — indexer 결과 의존 금지, 편향 방지)
+
+### Rate-limit Budget Port
+
+Tier B 전용. asynq queue 분리로는 부족 (같은 소스에 대한 call 총량 제어 필요).
+
+```go
+// internal/application/ports/budget.go
+type RateLimitBudget interface {
+    // 소스별 남은 예산 질의 (calls/window)
+    Remaining(ctx context.Context, source source.SourceID) (RemainingBudget, error)
+    // 호출 의도 예약 (실제 호출 전에 차감). 부족하면 ErrBudgetExhausted.
+    Reserve(ctx context.Context, source source.SourceID, n int) error
+    // 실패 시 환불 (네트워크 에러 등 소스가 실제로 카운트 안 한 케이스)
+    Refund(ctx context.Context, source source.SourceID, n int) error
+}
+
+type RemainingBudget struct {
+    Source      source.SourceID
+    Remaining   int
+    WindowReset time.Time
+    WindowLimit int
+}
+
+var ErrBudgetExhausted = errors.New("rate-limit budget exhausted")
+```
+
+**구현체**: `internal/infrastructure/queue/budget.go` — Redis INCR + TTL 기반 sliding / fixed window counter (기본 fixed window: Routescan 5 req/s & 100k/day = 2 window).
+
+**정책**:
+- Tier A 태스크는 budget 체크 스킵 (자체 노드)
+- Tier B 태스크 핸들러 시작 시 `Reserve()` — 실패하면 `asynq.SkipRetry` 대신 backoff 재시도
+- adapter 레벨 rate limiter(Phase 3 httpx)는 **단기 burst 방어**, budget port는 **장기 창 예산 추적** — 역할 분리
+
+### Tier 기반 Queue 이름 재설계
+
+```go
+Queues: map[string]int{
+    "default":      5,
+    "tier-a-rpc":   10,   // 전수, 높은 처리량
+    "tier-b-3rd":    3,   // 샘플링, 낮은 처리량 + budget 제어
+    "tier-c-mixed": 2,
+},
+```
+
+소스별 세분(`tier-b-blockscout`, `tier-b-routescan`)은 실제 부하 관찰 후 결정.
+
+### 신규 DoD 항목
+
+- [ ] `internal/application/ports/budget.go` — `RateLimitBudget` port
+- [ ] `internal/infrastructure/queue/budget.go` — Redis 기반 구현 + miniredis 테스트
+- [ ] Tier B 핸들러 경로에 budget reserve/refund 통합
+- [ ] tier별 queue 가중치 config 노출
+
+### 주의
+
+- **샘플 세트 재현성**: random seed·timestamp·blockNumber 조합을 `Run`에 기록 → 사후 재현 가능. Phase 4/5 `verification.Run`에 필드 추가 필요.
+- **예산 초과 시 동작**: fail fast가 아니라 "다음 window까지 대기 후 재시도" — 사용자가 설정 가능 (config `budget.exhausted_policy`: `skip` | `defer` | `fail`).
+- **Tier A와 B 혼합 Run**: 한 Run이 양쪽 모두 포함 가능. 이 경우 A 부분은 전수, B 부분은 샘플링으로 분기 실행 + 결과 합류. use case 레벨 분기(Phase 5).

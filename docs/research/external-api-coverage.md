@@ -22,6 +22,86 @@
 
 ---
 
+## 검증 Tier 분류 (2026-04-20)
+
+정합성 검증은 "진실의 원천(source of truth)"이 무엇이냐에 따라 **3-tier**로 갈린다. tier는 분류일 뿐 어댑터 구현을 3벌 만드는 게 아니다 — 동일 어댑터가 여러 tier를 커버하며, Capability에 tier 태그가 붙는다.
+
+| Tier | 진실의 원천 | 대상 지표 | 커버 방법 | 비교 모드 |
+|---|---|---|---|---|
+| **A. RPC-canonical** | RPC (archive) | block header · tx · receipt · logs · roots · `balance`/`nonce` at any block · `balanceOf` eth_call | **사용자 archive 노드 전수** | 1 vs 1 (indexer ↔ RPC) |
+| **B. Indexer-derived** | 없음 (cross-indexer 비교) | "addr가 보유한 전체 토큰 목록" · "token X 홀더 목록" · chain total_addresses/txs · top-N 쿼리 | **3rd-party indexer 샘플링** | N vs M (indexer ↔ Blockscout ↔ Routescan) |
+| **C. Mixed** | RPC + 3rd-party 양쪽 | internal tx (debug_trace) · ERC-20 Transfer 파생 지표 · 특정 토큰 balance at block | RPC 전수 가능하나 비쌈 → 정책 결정 | 1~3 way |
+
+**MVP 운영 전략 (사용자 합의, 2026-04-20)**:
+- **Tier A = main**. 모든 finalized 블록 전수. 비용 0 (자체 노드).
+- **Tier B = 보조**. rate-limit 예산 안에서 샘플링만. 빠지는 블록 있어도 무방.
+- **Tier C = 지표별 결정**. 기본은 3rd-party 빠른 샘플링. 정기 cross-check(주 1회 등) 시에만 RPC 재구성.
+
+"비쌈"의 의미: 금전 비용 아님. **시간/CPU/노드 IO** (예: holdings 재구성 = Transfer 로그 장범위 스캔 + 후보 토큰별 `balanceOf` 호출).
+
+---
+
+## 지표 우선순위 원칙 (Tier B 샘플링 대상)
+
+**기준이 확실하면 채택, latest-only는 후순위로 강등.**
+
+| 쿼리 유형 | 판정 | 비고 |
+|---|---|---|
+| `at block N` 지원 (blockTag / blockno 파라미터) | ✅ 채택 | RPC proxy 엔드포인트(eth_getBalance, eth_getTransactionCount, eth_call) |
+| `startblock`/`endblock` 범위 필터 | ✅ 채택 | Routescan `txlist`, `txlistinternal`, `tokentx` 등 — "범위 내 이벤트" 비교 기준 명확 |
+| 응답 메타에 **reflected block** 필드 노출 (`block_number_balance_updated_at` 등) | ✅ 조건부 채택 | tolerance window 안에 들어오는 샘플만 유효, 벗어나면 discard |
+| latest only · 메타 없음 | ⏬ **후순위로 미룸** | anchor 기준 검증 불가. "관찰(observe)" 카테고리로만 활용 |
+
+이 원칙으로 지표 선택이 정리된다. 검증 가능한 자원에 집중 투자.
+
+---
+
+## Tier B Anchor 전략 (at-block 미지원 API 대처)
+
+**문제**: Free tier 대부분의 cumulative 엔드포인트는 latest only (`addresstokenbalance`, `stats`, `token-balances` 등). historical at-block 조회 불가.
+
+**해법 — finalized anchor + 응답 메타 사후 대조**:
+
+1. verification run 시작 시점에 **`finalized` block을 anchor로 고정** (RPC `eth_getBlockByNumber("finalized")`)
+2. indexer 쪽은 해당 blockNumber 기준 스냅샷 조회
+3. 3rd-party는 latest 호출
+4. 3rd-party 응답에 **reflected-block 메타**가 있으면:
+   - tolerance: `reflected_block ∈ [anchor - tol_back, anchor + tol_fwd]` 범위면 유효
+   - 범위 밖이면 해당 샘플 **discard** (false positive 방지)
+5. 메타 없으면 해당 소스에서 해당 지표는 **검증 대상에서 제외**하거나 "관찰만" 처리
+
+**tolerance 기본값 (MVP 제안)**:
+- `tol_back = 0` (과거 상태 역반영은 허용 안 함)
+- `tol_fwd = 64 블록` (≈ 2분 / Optimism 2s block time)
+
+**reflected-block 메타 확인 상태**:
+- Blockscout `GET /addresses/{addr}` → `block_number_balance_updated_at` **있음 (확인됨)**
+- Blockscout `GET /addresses/{addr}/token-balances` → ⚠️ 확인 필요 (Open Q)
+- Blockscout `/stats` → 응답 timestamp만, 블록 메타 없음 → 관찰 전용
+- Routescan `account/*` → ⚠️ 확인 필요 (Open Q)
+- Routescan `account/balancehistory` (archive) → blockno 입력 시 정확 반영 기대 (미검증)
+
+**finalized 정의** (Optimism L2):
+- L2 `finalized` tag = L1에 배치 제출·challenge window 통과한 블록. 7일 challenge window (Fault Proof 이전) or 짧아진 window (Fault Proof 이후).
+- MVP 단순화: RPC `finalized` tag 그대로 사용. 추가 reorg safety 계산 안 함.
+
+---
+
+## L2 특이필드 백로그 (deferred)
+
+Optimism·L2 고유 필드. **MVP 대상 아님**, post-MVP 확장 시점에 다룸.
+
+| 필드 | 원천 | 비고 |
+|---|---|---|
+| `l1GasUsed` / `l1Fee` / `l1FeeScalar` | Optimism RPC tx receipt 확장 필드 | indexer가 저장하는지 확인 필요 |
+| deposit tx flag (L1→L2 deposit) | `type=0x7e` transaction | 일반 tx와 구분 처리 필요 |
+| `l1BlockNumber` (해당 L2 블록이 참조한 L1 블록) | 각 L2 블록 header | bridge·L1 이벤트 앵커에 필요 |
+| sequencer batch index | L1 batch submit 트랜잭션 | post-MVP |
+
+→ Capability enum에 추가 시점 결정은 사용자가 Optimism L2 특이 지표 검증 필요 시점.
+
+---
+
 ## 대상 지표 — "우리가 비교하고 싶은 것"
 
 Phase 2 기존 Capability + 사용자 요구 추가 반영:
@@ -256,6 +336,10 @@ Auth: `&apikey=XXX` 쿼리 파라미터
 - [ ] **Routescan `balancehistory` (archive)**: Optimism free tier에서 historical balance 조회 실제 동작하는지 (Etherscan free에선 PRO 전용)
 - [ ] **Blockscout `address/internal-transactions`**: REST v2에 이 엔드포인트 공식 존재 여부 (현재 미확인)
 - [ ] **Blockscout rate limit 정확 window**: 600 한도의 실제 창 (1h? 2h? rolling?) — 공식 문서 확인 or bypass-429 토큰 취득 절차
+- [ ] **reflected-block 메타 존재 여부** (Tier B anchor 전략 전제):
+  - Blockscout `/addresses/{addr}/token-balances` 응답에 `block_number_balance_updated_at` 또는 유사 필드 있는지
+  - Routescan `account/balance`, `account/tokenbalance`, `account/addresstokenbalance` 응답에 반영 블록 메타 있는지
+  - 없으면 해당 엔드포인트는 검증 대상 제외 (관찰만)
 
 ### 우선순위 B (가능하면)
 
@@ -426,3 +510,19 @@ adapters:
 - 1순위: `adapters/rpc/`, `adapters/blockscout/`, `adapters/routescan/` (3-way keyless)
 - 2순위: `adapters/etherscan/` (ETH-mainnet 확장 시점)
 - 3순위: `adapters/alchemy/` 등 opt-in 어댑터
+
+---
+
+## 추가 합의 (2026-04-20)
+
+1. **3-tier 모델 채택**. Tier A(RPC 전수) main + Tier B(3rd-party 샘플링) 보조 + Tier C(지표별 결정).
+2. **anchor block 전략**: finalized 고정 + 응답 메타 기반 사후 대조 + tolerance window(`tol_back=0`, `tol_fwd=64` 기본).
+3. **지표 우선순위 원칙**: `at block N` 또는 `startblock/endblock` 같이 **기준이 확실한 쿼리** 우선. **latest-only**는 후순위로 강등하거나 "관찰" 전용.
+4. **샘플링 4-stratum**: known addresses + top-N + random + recently-active.
+5. **rate-limit 예산 엔진**: Phase 7 scheduler에 필수 port로 추가 (Tier B 전용).
+6. **reorg safety**: MVP는 `finalized` tag만 사용, 추가 계산 안 함.
+7. **카테고리 재분류 (`Snapshot` 분할 등)**: 필요 시점에 결정, 지금은 보류.
+8. **L2 특이필드**: backlog 기록, MVP 범위 아님.
+9. **indexer 측 Capability**: 특정 필드 누락 허용("minor 정보 indexer에도 빠질 수 있음"). 구현 시 확인·문서화만.
+
+구현 착수 Gate: 위 "우선순위 A" Open Q 5항목 curl 검증 → research doc 업데이트 → Phase 2C 진행.

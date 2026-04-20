@@ -31,12 +31,12 @@
 - [ ] 페이지 라우트
   - `/` — 대시보드 (최근 run, 최근 diff, 소스 상태, Snapshot 비교 카드)
   - `/runs` — run 목록 + 필터 (metric category 포함)
-  - `/runs/[id]` — run 상세 + 그 run의 diff 목록
-  - `/diffs` — 전체 diff 목록 (카테고리별 탭: BlockImmutable / AddressLatest / AddressAtBlock / Snapshot)
-  - `/diffs/[id]` — diff 상세 (소스별 값 비교 테이블, 카테고리에 따라 판정 배지 표시 여부 조절)
+  - `/runs/[id]` — run 상세 + 그 run의 diff 목록 (Tier A 전수 결과 vs Tier B 샘플링 결과 분리 표시)
+  - `/diffs` — 전체 diff 목록 (카테고리별 탭: BlockImmutable / AddressLatest / AddressAtBlock / Snapshot) + **Tier 필터 (A/B/C)**
+  - `/diffs/[id]` — diff 상세 (소스별 값 비교 테이블 + **ReflectedBlock 표시**, **anchor window 시각화**, **Tier 배지**, **SamplingSeed**로 재현 안내)
   - `/schedules` — 스케줄 관리
-  - `/sources` — 연결된 소스·Capability 매트릭스 (필드 단위)
-  - `/runs/new` — 새 run 생성 폼 (Metric 선택 시 카테고리별로 그룹핑)
+  - `/sources` — 연결된 소스·Capability 매트릭스 (필드 단위 + **Tier 컬럼**)
+  - `/runs/new` — 새 run 생성 폼 (Metric 선택 시 카테고리별로 그룹핑 + Tier B Metric 선택 시 샘플링 stratum·예산 경고)
 - [ ] 공용 레이아웃 (헤더, 사이드바, 다크모드 토글)
 - [ ] 에러 바운더리 + 로딩 스켈레톤
 - [ ] docker-compose에 web 서비스 추가 (선택)
@@ -115,9 +115,14 @@ web/
 
 ### `/diffs/[id]`
 - 소스별 값을 **나란히 표시하는 비교 테이블**
-- severity 배지
-- replay 버튼
+  - 컬럼에 `reflected_block` 추가 (Tier B/C 응답의 실제 반영 블록 표시)
+  - anchor block과 reflected_block 차이를 "Δ +12 blocks" 형태로 시각화
+- severity 배지 + **Tier 배지** (A=초록 · B=노랑 · C=파랑)
+- anchor window(tol_back/tol_fwd) 시각 표시 — 이 범위 밖으로 벗어난 샘플은 "discarded"로 별도 표기
+- replay 버튼 — Tier B 재현 시 `SamplingSeed` 그대로 전달됨 안내
 - (선택) 해당 블록을 체인 익스플로러로 가는 링크
+- Tier A diff: "RPC 전수 비교 결과" 컨텍스트 노트
+- Tier B diff: "3rd-party 샘플링 비교 결과 · seed=N · anchor=block #M" 컨텍스트 노트
 
 ### `/runs/new`
 - react-hook-form + zod

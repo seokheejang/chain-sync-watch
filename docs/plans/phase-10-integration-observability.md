@@ -28,11 +28,19 @@
 핵심 카운터·히스토그램:
 - `csw_runs_total{chain, status}` — run 처리량
 - `csw_run_duration_seconds` — run 실행 시간 histogram
-- `csw_source_requests_total{source, metric, outcome}` — 소스 호출 결과
-- `csw_source_request_duration_seconds{source, metric}` — 소스 지연
+- `csw_source_requests_total{source, metric, tier, outcome}` — 소스 호출 결과 (Tier 라벨 추가)
+- `csw_source_request_duration_seconds{source, metric, tier}` — 소스 지연
 - `csw_rate_limited_total{source}` — rate limit 히트
-- `csw_discrepancies_total{metric, severity}` — 탐지된 불일치
+- `csw_discrepancies_total{metric, severity, tier}` — 탐지된 불일치 (Tier 분해)
 - `csw_asynq_queue_size{queue}` — 큐 적체 (asynq 자체 메트릭과 병행)
+- **Tier/Budget 관련 (2026-04-20 추가)**:
+  - `csw_run_blocks_total{chain, tier, outcome}` — Tier별 처리 블록 수 (A=전수, B=샘플 갯수)
+  - `csw_budget_reserved_total{source}` — `RateLimitBudget.Reserve()` 카운트
+  - `csw_budget_refunded_total{source}` — 실패 시 환불 카운트
+  - `csw_budget_remaining{source}` — 현재 window 남은 예산 (gauge)
+  - `csw_budget_exhausted_total{source}` — budget 고갈 이벤트
+  - `csw_anchor_window_discarded_total{metric}` — reflected_block이 window 밖이라 폐기된 샘플 수
+  - `csw_sampling_coverage{strategy, stratum}` — 4-stratum별 샘플링 커버리지 (known/top-N/random/recently-active)
 
 ### Health checks
 - `/healthz` — 프로세스 liveness만

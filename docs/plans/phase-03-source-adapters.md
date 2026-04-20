@@ -6,6 +6,24 @@ Phase 2에서 정의한 `Source` 포트의 **독립 패키지 번들 구현체**
 
 **사용자 정의 indexer(예: 내부 GraphQL)** 는 **이 Phase가 아니라** `examples/custom-graphql-adapter/`에서 패턴만 제공하고, 실사용은 사용자가 자기 repo에서 구현.
 
+## ⚠️ 2026-04-20 업데이트 — Tier 체계 + Anchor 준수
+
+[docs/research/external-api-coverage.md](../research/external-api-coverage.md) "검증 Tier 분류", [phase-02-source-ports.md](./phase-02-source-ports.md) Phase 2C 참조.
+
+### 어댑터 구현 원칙
+
+1. **Tier A Capability (RPC-canonical)**: 어떤 어댑터든 지원하면 `BlockTag` anchor(`numeric`/`finalized`)를 **반드시** 존중. blockTag 파라미터 누락된 엔드포인트만 있으면 해당 Capability는 `Supports() = false`.
+2. **Tier B/C Capability (3rd-party cumulative)**:
+   - 엔드포인트가 `at block N` 지원하면 `Anchor` 필드 그대로 사용.
+   - 엔드포인트가 `startblock`/`endblock` 범위 필터만 지원하면 **그것도 확실한 기준**으로 간주 (채택).
+   - latest only + **응답에 reflected-block 메타 없음** → 해당 Capability는 `Supports() = false`로 선언하거나 Result `ReflectedBlock = nil`로 명시 (caller가 관찰 전용으로 분류).
+   - latest only + reflected-block 메타 있음 → 메타를 `Result.ReflectedBlock`에 채워 반환. tolerance 판정은 caller(use case) 책임.
+3. **`ErrUnsupportedAtBlock`**: Anchor가 `Numeric`인데 어댑터가 지원 못 하면 이 에러 반환 (caller가 tier 정책에 따라 fallback 또는 skip).
+
+### 후순위 지표
+
+응답 메타도 없고 at-block 지원도 없는 "latest only 고아 지표"는 어댑터 **초기 구현에서 제외**. 명확한 기준으로 검증 가능한 지표부터 채움.
+
 ## ⚠️ 2026-04-18 업데이트 — Etherscan 후순위 + Routescan 추가
 
 외부 API 조사(`docs/research/external-api-coverage.md`) 결과 초안 구성 변경:

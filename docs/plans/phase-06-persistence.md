@@ -70,18 +70,25 @@ CREATE TABLE discrepancies (
     block_number   BIGINT NOT NULL,
     subject_type   TEXT NOT NULL,     -- block | address | contract
     subject_addr   BYTEA,              -- 20 bytes (nullable)
-    values         JSONB NOT NULL,     -- { source_id: { raw, typed, fetched_at } }
+    values         JSONB NOT NULL,     -- { source_id: { raw, typed, fetched_at, reflected_block } }
     severity       TEXT NOT NULL,
     trusted_sources TEXT[] NOT NULL,
     reasoning      TEXT,
     resolved       BOOLEAN NOT NULL DEFAULT FALSE,
     resolved_at    TIMESTAMPTZ,
-    detected_at    TIMESTAMPTZ NOT NULL
+    detected_at    TIMESTAMPTZ NOT NULL,
+    -- 2026-04-20 추가 — Tier/Anchor 메타 (phase-02-source-ports.md Phase 2C)
+    tier           SMALLINT,           -- 1=A, 2=B, 3=C (nullable: 기존 row 호환)
+    anchor_block   BIGINT,             -- Run이 고정한 anchor block (보통 finalized)
+    sampling_seed  BIGINT              -- Tier B 샘플링 재현용 (Random strategy seed)
 );
 CREATE INDEX idx_disc_run ON discrepancies(run_id);
 CREATE INDEX idx_disc_metric_block ON discrepancies(metric, block_number);
 CREATE INDEX idx_disc_severity ON discrepancies(severity) WHERE NOT resolved;
+CREATE INDEX idx_disc_tier ON discrepancies(tier) WHERE tier IS NOT NULL;
 ```
+
+`values` JSONB 스키마 갱신: `{source_id: {raw, typed, fetched_at, reflected_block}}` — Tier B anchor window 사후 재판정 가능하도록 `reflected_block` 포함.
 
 **결정 포인트**:
 - `run` 테이블에 policy/strategy 원본을 `JSONB`로 보관 (스키마 변경 유연)
