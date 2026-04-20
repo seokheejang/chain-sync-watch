@@ -47,59 +47,60 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-20
-**현재 단계**: **Phase 3 시작 전 — 3-tier 모델 확정, Open Q 5항목 검증 대기**
+**최종 업데이트**: 2026-04-20 (Phase 3D+3E 완료 시점)
+**현재 단계**: **Phase 3 거의 완료 — 3F(etherscan) 보류, 3G(custom-graphql 예시) 남음 → Phase 4 진입 준비**
 
-### 완료 (committed)
+### 완료 (committed, origin/main 대비 10 커밋 앞섬)
 
-- Phase 0 Foundations — commit `ac4b50e` + `4eab3cd`
-- Phase 1 `chain/` 도메인 (값객체 5종) — commit `498c09b`
-- Phase 2 `source/` 포트 + Fake — commit `a8b9b20` + `cfd7549`
-- Ralph 셀프 리뷰 + 테스트 fixture 합성화 — commit `725b063` + `f939232`
-- CLAUDE.md rule 6 (.env secret 비재출력 규칙) — commit `6d27c4c`
-- 외부 API 커버리지 리서치 + 이 체크포인트 — commit `50b3771`
+| 구분 | 커밋 |
+|---|---|
+| Phase 0 Foundations | `ac4b50e` · `4eab3cd` |
+| Phase 1 `chain/` 도메인 (값객체 5종) | `498c09b` |
+| Phase 2 `source/` 포트 + Fake | `a8b9b20` · `cfd7549` |
+| 테스트 fixture 합성화 + Ralph 셀프 리뷰 | `725b063` · `f939232` |
+| CLAUDE.md rule 6 (.env secret 비재출력) | `6d27c4c` |
+| 외부 API 커버리지 리서치 | `50b3771` |
+| 3-tier 모델 + anchor 전략 문서 (Phase 2C/3/7 doc) | `c82e62e` |
+| Open Q A 5항목 curl 검증 결과 | `79256fe` |
+| **Phase 2C** — Tier / BlockTag / ReflectedBlock / Capability 4종 | `96f8803` |
+| Lint false-positive suppression | `099c377` |
+| **Phase 3A** — `adapters/internal/httpx/` | `5469119` |
+| **Phase 3B** — `adapters/rpc/` (JSON-RPC) | `01460dd` |
+| **Phase 3C** — `adapters/internal/ethscan/` | `4639321` |
+| CLAUDE.md rule 7 (레이어별 comment discipline) | `b0ffde3` |
+| **Phase 3D + 3E** — `adapters/blockscout/` + `adapters/routescan/` | `679dd61` |
 
-### 진행 중 (uncommitted, WIP)
+### 진행 중
 
-- 2026-04-20 세션: 3-tier 모델 + anchor 전략 + Phase 2C·3·7 문서 갱신 (본 커밋 대기)
-- Phase 2C 착수 대기 중 (Open Q 5항목 검증 선행)
+- 없음. origin/main 대비 10 커밋 앞섬 — push는 사용자 판단에 맡김.
+
+### 남은 Phase 3 잔여
+
+- **Phase 3F `adapters/etherscan/`** → **post-MVP로 연기**. Free tier가 Optimism 미커버라 MVP에서 가치 없음. Ethereum mainnet 확장 시점에 구현 (ethscan.Client 재사용이라 1일 이내 추정).
+- **Phase 3G `examples/custom-graphql-adapter/`** → 간단 스켈레톤만 (README + 50줄 골격). 다음 세션 착수 후보.
 
 ### 다음 세션 재개 절차
 
-1. [docs/research/external-api-coverage.md](../research/external-api-coverage.md) **전문 정독**, 특히 "검증 Tier 분류 (2026-04-20)" / "지표 우선순위 원칙" / "Tier B Anchor 전략" / "추가 합의 (2026-04-20)" 섹션
-2. **사용자가 자체 full-archive RPC URL 제공** → `.env`의 `CSW_ADAPTERS__RPC__ENDPOINTS__10`에 세팅
-3. "Open Questions 우선순위 A" **5항목** curl로 최종 확인:
-   - Routescan `stats` 모듈의 chain-wide total_addresses/total_txs action 존재 여부
-   - Routescan `balancehistory` (archive) Optimism free 동작 확인
-   - Blockscout v2 `address/internal-transactions` 엔드포인트 공식 존재 여부
-   - Blockscout rate limit 실제 window + `bypass-429-option: temporary_token` 취득 절차
-   - **reflected-block 메타 존재 여부** (Blockscout `/addresses/*/token-balances`, Routescan `account/*`) — Tier B anchor 전략 전제
-4. 조사 결과 반영해 research doc 업데이트 + 커밋
-5. **Phase 2C** 진행: `Tier` enum + `BlockTag` + 기존 Query에 `Anchor` 필드 + `ResultMeta.ReflectedBlock` + 신규 Capability 4개 ([phase-02-source-ports.md](./phase-02-source-ports.md) "Phase 2C" 섹션 참조)
-6. **Phase 3A** 시작: `adapters/internal/httpx/` HTTP 공용 base (TDD Red → Green)
+1. (선택) **Phase 3G** — `examples/custom-graphql-adapter/` 스켈레톤
+2. **Phase 4 착수** — `internal/verification/` + `internal/diff/` 도메인. Phase 2C의 `Tolerance.Judge(ctx CompareContext)` 확장 시그니처 + `AnchorWindowed` / `Observational` Tolerance + MetricCategory ↔ Tier 매핑이 이미 [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) 에 반영됨
+3. 이후 Phase 5 (Application use case: Tier 분기 + SamplingStrategy + RateLimitBudget port)
 
-### 확정 결정
+### 확정 결정 (구현 완료된 것 포함)
 
-- **3-tier 모델** (2026-04-20): Tier A(RPC 전수, main) / Tier B(3rd-party 샘플링, 예산 내) / Tier C(지표별)
-- **anchor 전략**: finalized 고정 + 응답 메타 기반 사후 대조 + tolerance (`tol_back=0`, `tol_fwd=64`)
-- **지표 우선순위 원칙**: `at block N` · `startblock/endblock` 기준 확실한 쿼리 우선, latest-only + 메타 없음은 후순위
-- **샘플링 4-stratum**: known · top-N · random · recently-active
-- **RPC 기본 소스**: 사용자 자체 full-archive 노드 — 외부 공개 RPC는 archive 미지원 or debug_* 차단
-- **External API 우선순위**:
-  1. **Blockscout** (keyless, native REST v2, chain stats 유일 공급자)
-  2. **Routescan** (keyless, Etherscan-compat, Optimism free 커버, internal_tx + ERC-20 holdings 강력)
-  3. **Etherscan V2** — 후순위 (opt-in). ETH-mainnet 확장 시점에만 가치
-  4. Alchemy / Covalent / Moralis — post-MVP opt-in
-- **기본 OSS 공개 구성**: User-RPC (archive) + Blockscout + Routescan = **keyless 3-way**
-- **Phase 3 어댑터 순서**: `httpx` → `rpc` → `internal/ethscan` → `blockscout` → `routescan` → `etherscan` (후순위) → docs/examples
-- **L2 특이필드** (l1Fee, l1GasUsed, deposit flag, l1BlockNumber): backlog, MVP 범위 아님
-- **indexer Capability 선언**: 필드 누락 허용, 구현 시 확인·문서화만
+- **3-tier 모델** ✅ 구현: Tier A(RPC 전수) / Tier B(3rd-party 샘플링) / Tier C(지표별) — `internal/source/tier.go` + `Capability.Tier()`
+- **anchor 전략** ✅ 구현 기반: `BlockTag` 값객체 · `ResultMeta.ReflectedBlock` · Blockscout `block_number_balance_updated_at` 실측 반영
+- **4-stratum 샘플링**: Phase 5에서 구현 예정
+- **기본 OSS 공개 구성 = User-RPC(archive) + Blockscout + Routescan** 3-way ✅ 모든 어댑터 구현 완료
+- **Routescan-specific 성과**: `account/balancehistory` Optimism free 동작 → Tier A fallback 경로 확보
+- **Blockscout 스팸 필터**: `is_scam` / `reputation != "ok"` 토큰 자동 제외 (ERC-20 holdings)
+- **L2 특이필드**: backlog 유지 (post-MVP)
+- **indexer Capability 선언**: 필요 시 Phase 4/5에서 도입
 
-### Open Items — 코드 작업 전 확정 필요
+### Open Items — Phase 4/5 착수 전 확정 필요
 
-- [ ] "Open Questions 우선순위 A" 5항목 검증 완료
-- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용")
-- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail)
+- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용") — Phase 4 `JudgementPolicy` 설계에서 결정
+- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail) — Phase 7에서 실제 config 노출
+- [ ] Blockscout `bypass-429-option` 토큰 취득 절차 (실제 429 히트 시점에 실험)
 
 ---
 
@@ -110,9 +111,15 @@ examples/
 | 0 | Foundations | ✅ Done | — | [phase-00-foundations.md](./phase-00-foundations.md) |
 | 1 | `chain/` 도메인 (ChainID slug/name 매핑) | ✅ Done | 0 | [phase-01-chain-domain.md](./phase-01-chain-domain.md) |
 | 2 | `source/` 포트 (필드 단위 Capability, 코어 추상) | ✅ Done | 1 | [phase-02-source-ports.md](./phase-02-source-ports.md) |
-| 2C | Capability 확장 + Tier 체계 + Anchor BlockTag | 🟡 Planned | 2 | [phase-02-source-ports.md](./phase-02-source-ports.md) (Phase 2C 섹션) |
-| 3 | 번들 어댑터 (`rpc`, `blockscout`, **`routescan`**, `etherscan` 후순위) + 커스텀 예시 | ⛔ Blocked (Open Q 5항목 검증 대기) | 2 / 2C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
-| 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ⬜ Not started | 1, 2 | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
+| 2C | Capability 확장 + Tier 체계 + Anchor BlockTag | ✅ Done | 2 | [phase-02-source-ports.md](./phase-02-source-ports.md) (Phase 2C 섹션) |
+| 3A | `adapters/internal/httpx/` (공용 HTTP base) | ✅ Done | 2C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3B | `adapters/rpc/` (JSON-RPC, archive+debug opt-in) | ✅ Done | 3A | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3C | `adapters/internal/ethscan/` (Etherscan-compat base) | ✅ Done | 3A | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3D | `adapters/blockscout/` (REST v2 + proxy hybrid) | ✅ Done | 3C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3E | `adapters/routescan/` (Etherscan-compat) | ✅ Done | 3C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3F | `adapters/etherscan/` | ⏸️ Deferred (post-MVP, ETH-mainnet 확장 시) | 3C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 3G | `examples/custom-graphql-adapter/` | ⬜ Not started | 2C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
+| 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ⬜ Not started | 1, 2C | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
 | 5 | Application (use case) | ⬜ Not started | 2, 4 | [phase-05-application.md](./phase-05-application.md) |
 | 6 | Persistence (Postgres + gorm) | ⬜ Not started | 4, 5 | [phase-06-persistence.md](./phase-06-persistence.md) |
 | 7 | Queue / Scheduler (Redis + asynq) | ⬜ Not started | 5 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
@@ -127,6 +134,7 @@ examples/
 - 🟡 In progress / Proposed
 - ✅ Done
 - ⛔ Blocked (외부 입력/조사 대기)
+- ⏸️ Deferred (post-MVP)
 
 ## 원칙
 
