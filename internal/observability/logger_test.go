@@ -124,7 +124,9 @@ func TestLoggerFromContext_NoAttrsWhenEmpty(t *testing.T) {
 
 func TestLoggerFromContext_NilSafety(t *testing.T) {
 	// nil context must not panic; nil base should fall back to slog.Default.
-	log := observability.LoggerFromContext(nil, nil)
+	// This test exists precisely to lock in the nil-context behaviour, so
+	// staticcheck SA1012 ("do not pass nil Context") is expected here.
+	log := observability.LoggerFromContext(nil, nil) //nolint:staticcheck // SA1012: nil-context is the subject under test.
 	require.NotNil(t, log)
 	log.Info("should-not-panic")
 }

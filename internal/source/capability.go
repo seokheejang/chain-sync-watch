@@ -31,9 +31,12 @@ const (
 	// --- Chain-wide cumulative snapshots (not anchored to a block) ---
 	// Semantically fuzzy across sources; judgments over these should be
 	// observational only.
-	CapTotalAddressCount  Capability = "snapshot.total_addresses"
-	CapTotalTxCount       Capability = "snapshot.total_txs"
-	CapERC20TokenCount    Capability = "snapshot.erc20_token_count"
+	CapTotalAddressCount Capability = "snapshot.total_addresses"
+	CapTotalTxCount      Capability = "snapshot.total_txs"
+	// The "token_count" string name triggers gosec G101 (looks like a
+	// credential pattern). It is a stable capability identifier used in
+	// logs/metrics, not a secret.
+	CapERC20TokenCount    Capability = "snapshot.erc20_token_count" //nolint:gosec // G101: capability name, not credential
 	CapTotalContractCount Capability = "snapshot.total_contracts"
 
 	// --- Per-address ERC-20 (Phase 2C) ---

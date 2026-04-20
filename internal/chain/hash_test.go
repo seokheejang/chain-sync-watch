@@ -120,13 +120,16 @@ func TestTxHash_BlockHash_AliasOfHash32(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assignment works both directions without conversion — compiles
-	// only if the types are true aliases (type X = Hash32).
-	var tx chain.TxHash = h
-	var bh chain.BlockHash = h
+	// only if the types are true aliases (type X = Hash32). The
+	// explicit type annotations here are the subject under test, so we
+	// intentionally disable staticcheck ST1023 (which would ask us to
+	// drop them) — dropping them would defeat the aliasing assertion.
+	var tx chain.TxHash = h    //nolint:staticcheck // ST1023: explicit type is the assertion.
+	var bh chain.BlockHash = h //nolint:staticcheck // ST1023: explicit type is the assertion.
 	require.Equal(t, h, tx)
 	require.Equal(t, h, bh)
 
 	// Same the other way.
-	var back chain.Hash32 = tx
+	var back chain.Hash32 = tx //nolint:staticcheck // ST1023: explicit type is the assertion.
 	require.Equal(t, h, back)
 }
