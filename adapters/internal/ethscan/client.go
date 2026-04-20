@@ -184,6 +184,100 @@ func (c *Client) Call(ctx context.Context, module, action string, params map[str
 	return classifyErrorMessage(env.Result, env.Message)
 }
 
+// CallProxy hits ?module=proxy&action=<method>&... and decodes the
+// RPC result into out. Some upstreams (Routescan) wrap proxy
+// responses in the Etherscan envelope; others (Blockscout, classic
+// Etherscan) emit raw JSON-RPC. We sniff the first non-space byte
+// pair and handle both.
+func (c *Client) CallProxy(ctx context.Context, method string, params map[string]string, out any) error {
+	q := url.Values{}
+	q.Set("module", "proxy")
+	q.Set("action", method)
+	for k, v := range params {
+		q.Set(k, v)
+	}
+	if c.apiKey != "" {
+		q.Set("apikey", c.apiKey)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"?"+q.Encode(), http.NoBody)
+	if err != nil {
+		return fmt.Errorf("ethscan: build proxy request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.hc.Do(ctx, req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("%w: %v", source.ErrSourceUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return source.ErrRateLimited
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("%w: upstream status %d", source.ErrSourceUnavailable, resp.StatusCode)
+		}
+		return fmt.Errorf("%w: http %d: %s",
+			source.ErrInvalidResponse, resp.StatusCode, previewBody(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%w: read body: %v", source.ErrInvalidResponse, err)
+	}
+
+	return decodeProxyBody(body, out)
+}
+
+// decodeProxyBody handles both envelope-wrapped and raw JSON-RPC
+// payloads. We pick by the presence of a top-level "jsonrpc" field;
+// absence falls through to envelope mode.
+func decodeProxyBody(body []byte, out any) error {
+	// Raw JSON-RPC: {"jsonrpc":"2.0", "id":..., "result":..., "error":...}
+	var rpc struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Result  json.RawMessage `json:"result"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &rpc); err == nil && rpc.JSONRPC != "" {
+		if rpc.Error != nil {
+			if rpc.Error.Code == -32601 {
+				return fmt.Errorf("%w: %s", source.ErrUnsupported, rpc.Error.Message)
+			}
+			return fmt.Errorf("%w: %s", source.ErrInvalidResponse, rpc.Error.Message)
+		}
+		if out == nil || len(rpc.Result) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(rpc.Result, out); err != nil {
+			return fmt.Errorf("%w: decode proxy result: %v", source.ErrInvalidResponse, err)
+		}
+		return nil
+	}
+
+	// Fallback: envelope shape with nested result.
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return fmt.Errorf("%w: decode proxy envelope: %v", source.ErrInvalidResponse, err)
+	}
+	if env.Status != "1" {
+		return classifyErrorMessage(env.Result, env.Message)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(env.Result, out)
+}
+
 // isEmptyResultMessage recognises Etherscan's idiomatic "no data
 // here, but the call itself worked" messages. The set is small and
 // stable across upstreams; new phrases can be added as encountered.

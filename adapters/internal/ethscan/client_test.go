@@ -197,6 +197,48 @@ func TestClient_Call_TransportErrorMapsToUnavailable(t *testing.T) {
 		"expected ErrSourceUnavailable, got %v", err)
 }
 
+// Proxy module handles the raw JSON-RPC shape (Blockscout / classic
+// Etherscan) — result unwraps without a status envelope.
+func TestClient_CallProxy_RawJSONRPC(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "proxy", r.URL.Query().Get("module"))
+		require.Equal(t, "eth_blockNumber", r.URL.Query().Get("action"))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x1234"}`))
+	}))
+	defer srv.Close()
+
+	c := ethscan.New(srv.URL)
+	var hex string
+	require.NoError(t, c.CallProxy(context.Background(), "eth_blockNumber", nil, &hex))
+	require.Equal(t, "0x1234", hex)
+}
+
+// Proxy module also handles the envelope-wrapped shape (Routescan).
+func TestClient_CallProxy_EnvelopeWrapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"1","message":"OK","result":"0xabcd"}`))
+	}))
+	defer srv.Close()
+
+	c := ethscan.New(srv.URL)
+	var hex string
+	require.NoError(t, c.CallProxy(context.Background(), "eth_blockNumber", nil, &hex))
+	require.Equal(t, "0xabcd", hex)
+}
+
+// JSON-RPC error -32601 must surface as ErrUnsupported.
+func TestClient_CallProxy_MethodNotFoundMapsToUnsupported(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}`))
+	}))
+	defer srv.Close()
+
+	c := ethscan.New(srv.URL)
+	var hex string
+	err := c.CallProxy(context.Background(), "debug_something", nil, &hex)
+	require.ErrorIs(t, err, source.ErrUnsupported)
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 // newEthscanServer wires up a minimal server that decodes the URL
