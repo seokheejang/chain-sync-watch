@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/seokheejang/chain-sync-watch/internal/application"
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/source"
@@ -181,7 +182,10 @@ func TestDiffRoundTrip_BlockSubject(t *testing.T) {
 		Reasoning:      "blockscout diverged",
 	}
 
-	m, err := toDiffModel(&d, j)
+	m, err := toDiffModel(&d, j, application.SaveDiffMeta{
+		Tier:        source.TierA,
+		AnchorBlock: 990,
+	})
 	require.NoError(t, err)
 	require.Equal(t, "rid", m.RunID)
 	require.Equal(t, "block.hash", m.MetricKey)
@@ -189,6 +193,8 @@ func TestDiffRoundTrip_BlockSubject(t *testing.T) {
 	require.Nil(t, m.SubjectAddr)
 	require.NotNil(t, m.Tier)
 	require.Equal(t, int16(source.TierA), *m.Tier)
+	require.NotNil(t, m.AnchorBlock)
+	require.Equal(t, int64(990), *m.AnchorBlock)
 
 	// Simulate DB assigning an id.
 	m.ID = 42
@@ -223,7 +229,7 @@ func TestDiffRoundTrip_AddressSubject(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	m, err := toDiffModel(&d, diff.Judgement{Severity: diff.SevWarning})
+	m, err := toDiffModel(&d, diff.Judgement{Severity: diff.SevWarning}, application.SaveDiffMeta{})
 	require.NoError(t, err)
 	require.Len(t, m.SubjectAddr, 20)
 

@@ -59,7 +59,7 @@ func (f *replayFixture) seedDivergentDiff(t *testing.T) application.DiffID {
 		f.base,
 	)
 	require.NoError(t, err)
-	id, err := f.diffs.Save(context.Background(), &d, diff.Judgement{Severity: diff.SevCritical})
+	id, err := f.diffs.Save(context.Background(), &d, diff.Judgement{Severity: diff.SevCritical}, application.SaveDiffMeta{})
 	require.NoError(t, err)
 	return id
 }
@@ -165,7 +165,7 @@ func TestReplayDiff_RejectsNonBlockImmutable(t *testing.T) {
 		f.base,
 	)
 	require.NoError(t, err)
-	id, err := f.diffs.Save(context.Background(), &d, diff.Judgement{Severity: diff.SevInfo})
+	id, err := f.diffs.Save(context.Background(), &d, diff.Judgement{Severity: diff.SevInfo}, application.SaveDiffMeta{})
 	require.NoError(t, err)
 
 	_, err = f.useCase.Execute(context.Background(), id)

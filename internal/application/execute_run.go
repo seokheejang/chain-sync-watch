@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
@@ -14,21 +15,26 @@ import (
 
 // ExecuteRun is the verification engine. It loads a Run, fixes an
 // anchor, fans out block fetches across Sources, compares per-
-// metric values, and persists DiffRecords for every disagreement.
+// metric values under the Tolerance a resolver hands back, and
+// persists DiffRecords for every disagreement.
 //
-// Scope in Phase 5B (MVP):
+// Scope in Phase 7C.1:
 //
 //   - BlockImmutable metrics only. AddressLatest / AddressAtBlock
-//     require an address-sampling stage not yet wired up; Snapshot
-//     comparison is observational and lands with the 4-stratum
-//     sampling work in Phase 7.
-//   - Implicit ExactMatch tolerance (string equality on the Raw
-//     field). A ToleranceResolver port comes in when per-metric
-//     slack becomes necessary.
+//     require an address-sampling stage not yet wired up
+//     (Phase 7C.2). Snapshot comparison is Observational and
+//     produces no diffs in the current engine.
+//   - Tolerance is resolved per Metric via the ToleranceResolver
+//     port (nil falls back to ExactMatch across all categories).
+//     Pair-wise Tolerance outcomes collapse to whole-sample
+//     decisions: any pair signalling needDiscard drops the sample;
+//     otherwise disagreement happens when any pair says ok=false.
+//   - DiffRepository.Save receives SaveDiffMeta (Tier derived from
+//     Capability, AnchorBlock from ChainHead.Finalized).
 //   - Per-block fetches run in parallel across Sources; blocks
 //     themselves are processed sequentially.
 //   - No RateLimitBudget interaction — Tier A only, budget is
-//     Phase 7 (Tier B sampling).
+//     Phase 7C.2/7C.3 (Tier B sampling).
 //
 // Terminal states:
 //
@@ -49,6 +55,8 @@ type ExecuteRun struct {
 	ChainHead ChainHead
 	Clock     Clock
 	Policy    diff.JudgementPolicy
+	// Tolerance is optional; nil means DefaultToleranceResolver{}.
+	Tolerance ToleranceResolver
 }
 
 // Execute runs the full verification pipeline for runID.
@@ -128,7 +136,7 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 
 // compareBlock fetches `block` from every Source in parallel and
 // emits a DiffRecord for every BlockImmutable metric where the
-// sources disagree.
+// configured Tolerance says the sources disagree.
 func (uc ExecuteRun) compareBlock(
 	ctx context.Context,
 	run *verification.Run,
@@ -138,6 +146,7 @@ func (uc ExecuteRun) compareBlock(
 	metrics []verification.Metric,
 ) error {
 	results := fetchBlockAll(ctx, sources, block)
+	resolver := uc.resolver()
 
 	for _, m := range metrics {
 		snapshots := map[source.SourceID]diff.ValueSnapshot{}
@@ -160,27 +169,101 @@ func (uc ExecuteRun) compareBlock(
 		if len(snapshots) < 2 {
 			continue
 		}
-		if allAgree(snapshots) {
+		outcome := applyTolerance(resolver.For(m), m, snapshots, anchor)
+		switch outcome {
+		case toleranceAgree, toleranceDiscard:
 			continue
+		case toleranceDisagree:
+			d, err := diff.NewDiscrepancy(
+				run.ID(),
+				m,
+				block,
+				diff.Subject{Type: diff.SubjectBlock},
+				snapshots,
+				uc.Clock.Now(),
+			)
+			if err != nil {
+				continue
+			}
+			j := uc.Policy.Judge(d)
+			meta := SaveDiffMeta{
+				Tier:        m.Capability.Tier(),
+				AnchorBlock: anchor,
+			}
+			if _, err := uc.Diffs.Save(ctx, &d, j, meta); err != nil {
+				return fmt.Errorf("execute run: save diff: %w", err)
+			}
 		}
-		d, err := diff.NewDiscrepancy(
-			run.ID(),
-			m,
-			block,
-			diff.Subject{Type: diff.SubjectBlock},
-			snapshots,
-			uc.Clock.Now(),
-		)
-		if err != nil {
-			continue
-		}
-		j := uc.Policy.Judge(d)
-		if _, err := uc.Diffs.Save(ctx, &d, j); err != nil {
-			return fmt.Errorf("execute run: save diff: %w", err)
-		}
-		_ = anchor // anchor is threaded for future Tolerance integration
 	}
 	return nil
+}
+
+// resolver returns the configured ToleranceResolver or
+// DefaultToleranceResolver when the caller left it nil.
+func (uc ExecuteRun) resolver() ToleranceResolver {
+	if uc.Tolerance == nil {
+		return DefaultToleranceResolver{}
+	}
+	return uc.Tolerance
+}
+
+// toleranceOutcome collapses per-pair Tolerance results into a
+// whole-sample decision.
+type toleranceOutcome int
+
+const (
+	toleranceAgree toleranceOutcome = iota
+	toleranceDisagree
+	toleranceDiscard
+)
+
+// applyTolerance runs tol over every unordered pair of snapshots
+// and reduces the results:
+//
+//   - Any pair returning needDiscard=true drops the whole sample
+//     (conservative: one stale source taints the observation).
+//   - All pairs returning ok=true → agree, no diff.
+//   - Otherwise → disagreement, caller persists a DiffRecord.
+//
+// Pairs are iterated in SourceID-sorted order so the outcome is
+// deterministic given the same snapshot set.
+func applyTolerance(
+	tol diff.Tolerance,
+	m verification.Metric,
+	snapshots map[source.SourceID]diff.ValueSnapshot,
+	anchor chain.BlockNumber,
+) toleranceOutcome {
+	type entry struct {
+		sid  source.SourceID
+		snap diff.ValueSnapshot
+	}
+	entries := make([]entry, 0, len(snapshots))
+	for sid, s := range snapshots {
+		entries = append(entries, entry{sid, s})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].sid < entries[j].sid })
+
+	allOK := true
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			ctx := diff.CompareContext{
+				AnchorBlock: anchor,
+				ReflectedA:  entries[i].snap.ReflectedBlock,
+				ReflectedB:  entries[j].snap.ReflectedBlock,
+			}
+			ok, discard := tol.Judge(entries[i].snap, entries[j].snap, m, ctx)
+			if discard {
+				return toleranceDiscard
+			}
+			if !ok {
+				allOK = false
+			}
+		}
+	}
+	if allOK {
+		return toleranceAgree
+	}
+	return toleranceDisagree
 }
 
 // fetchResult pairs a Source with its FetchBlock outcome.
@@ -219,22 +302,4 @@ func filterByCategory(metrics []verification.Metric, c verification.MetricCatego
 		}
 	}
 	return out
-}
-
-// allAgree reports whether every snapshot shares the same Raw
-// value. An empty map is vacuously "all agree".
-func allAgree(snapshots map[source.SourceID]diff.ValueSnapshot) bool {
-	first := ""
-	started := false
-	for _, v := range snapshots {
-		if !started {
-			first = v.Raw
-			started = true
-			continue
-		}
-		if v.Raw != first {
-			return false
-		}
-	}
-	return true
 }

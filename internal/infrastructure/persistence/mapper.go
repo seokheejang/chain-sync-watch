@@ -94,7 +94,7 @@ func toRun(m runModel) (*verification.Run, error) {
 
 // --- Diff -----------------------------------------------------------
 
-func toDiffModel(d *diff.Discrepancy, j diff.Judgement) (diffModel, error) {
+func toDiffModel(d *diff.Discrepancy, j diff.Judgement, meta application.SaveDiffMeta) (diffModel, error) {
 	values, err := marshalValues(d.Values)
 	if err != nil {
 		return diffModel{}, err
@@ -106,11 +106,24 @@ func toDiffModel(d *diff.Discrepancy, j diff.Judgement) (diffModel, error) {
 		subjectAddr = addr
 	}
 
-	tier := int16(d.Metric.Capability.Tier())
+	// Prefer meta.Tier when the caller supplied one; fall back to
+	// deriving from the metric's Capability so older call sites
+	// (and direct fake-repo use) still get a sensible Tier column.
+	tier := int16(meta.Tier)
+	if tier == 0 {
+		tier = int16(d.Metric.Capability.Tier())
+	}
 	var tierPtr *int16
 	if tier != 0 {
 		t := tier
 		tierPtr = &t
+	}
+
+	var anchorPtr *int64
+	if meta.AnchorBlock != 0 {
+		//nolint:gosec // G115: block heights stay within int64.
+		a := int64(meta.AnchorBlock.Uint64())
+		anchorPtr = &a
 	}
 
 	trustedStrings := make([]string, len(j.TrustedSources))
@@ -132,6 +145,8 @@ func toDiffModel(d *diff.Discrepancy, j diff.Judgement) (diffModel, error) {
 		Reasoning:      j.Reasoning,
 		DetectedAt:     d.DetectedAt,
 		Tier:           tierPtr,
+		AnchorBlock:    anchorPtr,
+		SamplingSeed:   meta.SamplingSeed,
 	}, nil
 }
 

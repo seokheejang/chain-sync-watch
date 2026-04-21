@@ -163,6 +163,10 @@ func TestExecuteRun_OneSourceDisagreesProducesDiff(t *testing.T) {
 	require.Equal(t, verification.MetricBlockHash, rec.Discrepancy.Metric)
 	require.Equal(t, diff.SevCritical, rec.Judgement.Severity)
 	require.Equal(t, []source.SourceID{"blockscout", "rpc"}, rec.Judgement.TrustedSources)
+	// Phase 7C.1: meta is populated from the metric Capability +
+	// the Finalized anchor the fixture seeds (990).
+	require.Equal(t, source.TierA, rec.Tier)
+	require.Equal(t, chain.BlockNumber(990), rec.AnchorBlock)
 }
 
 func TestExecuteRun_SourceErrorsAreNonFatal(t *testing.T) {
@@ -359,6 +363,33 @@ func TestExecuteRun_MultipleBlocksMultipleMetrics(t *testing.T) {
 	require.Len(t, recs, 1)
 	require.Equal(t, chain.BlockNumber(101), recs[0].Discrepancy.Block)
 	require.Equal(t, "block.hash", recs[0].Discrepancy.Metric.Key)
+}
+
+func TestExecuteRun_ToleranceOverrideSuppressesDiff(t *testing.T) {
+	// Same setup as "one source disagrees", but a ToleranceResolver
+	// override pins MetricBlockHash to Observational, which never
+	// reports disagreement. The disagreement therefore produces no
+	// DiffRecord.
+	f := newExecFixture()
+	f.useCase.Tolerance = application.DefaultToleranceResolver{
+		Overrides: map[string]diff.Tolerance{
+			verification.MetricBlockHash.Key: diff.Observational{},
+		},
+	}
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBlockHash))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBlockHash))
+	rpc.SetBlockResponse(mkBlockResult(t, hex32("ab"), hex32("00"), 1700000000, 42), nil)
+	bs.SetBlockResponse(mkBlockResult(t, hex32("cd"), hex32("00"), 1700000000, 42), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBlockHash},
+		[]chain.BlockNumber{100},
+	)
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "observational tolerance should suppress the diff")
 }
 
 func TestExecuteRun_CannotStartFromNonPendingRun(t *testing.T) {

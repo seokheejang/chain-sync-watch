@@ -31,16 +31,22 @@ func NewFakeDiffRepo() *FakeDiffRepo {
 	}
 }
 
-// Save persists d + j and returns the assigned DiffID.
-func (f *FakeDiffRepo) Save(_ context.Context, d *diff.Discrepancy, j diff.Judgement) (application.DiffID, error) {
+// Save persists d + j and returns the assigned DiffID. The meta
+// fields land on the resulting DiffRecord for callers that want to
+// assert on Tier / AnchorBlock / SamplingSeed without going
+// through the Postgres mapper.
+func (f *FakeDiffRepo) Save(_ context.Context, d *diff.Discrepancy, j diff.Judgement, meta application.SaveDiffMeta) (application.DiffID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
 	id := application.DiffID(fmt.Sprintf("fake-%d", f.seq))
 	rec := &application.DiffRecord{
-		ID:          id,
-		Discrepancy: *d,
-		Judgement:   j,
+		ID:           id,
+		Discrepancy:  *d,
+		Judgement:    j,
+		Tier:         meta.Tier,
+		AnchorBlock:  meta.AnchorBlock,
+		SamplingSeed: meta.SamplingSeed,
 	}
 	f.byID[id] = rec
 	f.byRun[d.RunID] = append(f.byRun[d.RunID], id)

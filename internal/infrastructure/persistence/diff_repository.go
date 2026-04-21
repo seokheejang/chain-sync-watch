@@ -24,9 +24,12 @@ type DiffRepo struct {
 func NewDiffRepo(db *gorm.DB) *DiffRepo { return &DiffRepo{db: db} }
 
 // Save inserts the Discrepancy + Judgement pair and returns the
-// assigned DiffID.
-func (r *DiffRepo) Save(ctx context.Context, d *diff.Discrepancy, j diff.Judgement) (application.DiffID, error) {
-	m, err := toDiffModel(d, j)
+// assigned DiffID. Meta columns (tier, anchor_block, sampling_seed)
+// are filled from the explicit SaveDiffMeta rather than derived
+// from the discrepancy, so ReplayDiff can carry forward the
+// original values.
+func (r *DiffRepo) Save(ctx context.Context, d *diff.Discrepancy, j diff.Judgement, meta application.SaveDiffMeta) (application.DiffID, error) {
+	m, err := toDiffModel(d, j, meta)
 	if err != nil {
 		return "", fmt.Errorf("diff repo save: %w", err)
 	}

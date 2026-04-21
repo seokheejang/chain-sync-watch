@@ -93,11 +93,28 @@ type RunRepository interface {
 	List(ctx context.Context, f RunFilter) (runs []*verification.Run, total int, err error)
 }
 
+// SaveDiffMeta carries the verification-time metadata that lives
+// alongside a DiffRecord but is not part of the Discrepancy or
+// Judgement domain objects themselves: the Tier of the metric at
+// save time, the Run's anchor block, and (for Tier B sampled
+// metrics) the seed that produced the address or block set.
+//
+// A zero value is legal — missing fields translate to NULL columns
+// in persistence and an unresolved tier on the read model. Callers
+// fill in what they can: ExecuteRun derives Tier from the metric's
+// Capability and the anchor from ChainHead.Finalized; ReplayDiff
+// carries the meta forward from the record it is re-verifying.
+type SaveDiffMeta struct {
+	Tier         source.Tier
+	AnchorBlock  chain.BlockNumber
+	SamplingSeed *int64
+}
+
 // DiffRepository persists Discrepancy + Judgement pairs as
 // DiffRecords. Save returns the assigned DiffID so the caller can
 // pair Runs with their diffs without a second query.
 type DiffRepository interface {
-	Save(ctx context.Context, d *diff.Discrepancy, j diff.Judgement) (DiffID, error)
+	Save(ctx context.Context, d *diff.Discrepancy, j diff.Judgement, meta SaveDiffMeta) (DiffID, error)
 	FindByRun(ctx context.Context, runID verification.RunID) ([]DiffRecord, error)
 	FindByID(ctx context.Context, id DiffID) (*DiffRecord, error)
 	List(ctx context.Context, f DiffFilter) (records []DiffRecord, total int, err error)

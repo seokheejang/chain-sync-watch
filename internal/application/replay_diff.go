@@ -22,23 +22,26 @@ type ReplayResult struct {
 }
 
 // ReplayDiff re-fetches every Source that originally participated in
-// a DiffRecord, compares again at the same (block, metric), and
-// either marks the record resolved (if values now agree) or
-// persists a fresh Discrepancy tied to the same RunID (if they
-// still disagree).
+// a DiffRecord, compares again at the same (block, metric) under
+// the configured Tolerance, and either marks the record resolved
+// (values now agree) or persists a fresh Discrepancy tied to the
+// same RunID (they still disagree).
 //
-// Scope in Phase 5C:
+// Scope in Phase 7C.1:
 //
 //   - Only BlockImmutable metrics. Other categories return an error
-//     — they need the address-sampling stage that lands in Phase 7.
+//     — they need the address-sampling stage that lands in 7C.2.
 //   - Replay does NOT re-transition the Run. The original Run
 //     remains in whatever terminal state it reached; replays live
 //     alongside it as additional DiffRecords.
+//   - The original DiffRecord's AnchorBlock + SamplingSeed are
+//     carried forward so replays remain reproducible.
 type ReplayDiff struct {
-	Diffs   DiffRepository
-	Sources SourceGateway
-	Clock   Clock
-	Policy  diff.JudgementPolicy
+	Diffs     DiffRepository
+	Sources   SourceGateway
+	Clock     Clock
+	Policy    diff.JudgementPolicy
+	Tolerance ToleranceResolver
 }
 
 // Execute re-runs the comparison for the given DiffID.
@@ -86,7 +89,23 @@ func (uc ReplayDiff) Execute(ctx context.Context, id DiffID) (ReplayResult, erro
 		return ReplayResult{}, errors.New("replay diff: fewer than 2 sources returned a value")
 	}
 
-	if allAgree(snapshots) {
+	resolver := uc.Tolerance
+	if resolver == nil {
+		resolver = DefaultToleranceResolver{}
+	}
+	outcome := applyTolerance(
+		resolver.For(rec.Discrepancy.Metric),
+		rec.Discrepancy.Metric,
+		snapshots,
+		rec.AnchorBlock,
+	)
+	switch outcome {
+	case toleranceAgree, toleranceDiscard:
+		// Discard behaves like agree for replay purposes — the
+		// sample is unreliable, but we treat the absence of a
+		// confirmed disagreement as resolution. Callers that want
+		// stricter semantics can branch on the outcome before
+		// calling Execute.
 		if err := uc.Diffs.MarkResolved(ctx, id, uc.Clock.Now()); err != nil {
 			return ReplayResult{}, fmt.Errorf("replay diff: mark resolved: %w", err)
 		}
@@ -105,7 +124,15 @@ func (uc ReplayDiff) Execute(ctx context.Context, id DiffID) (ReplayResult, erro
 		return ReplayResult{}, fmt.Errorf("replay diff: build discrepancy: %w", err)
 	}
 	j := uc.Policy.Judge(d)
-	newID, err := uc.Diffs.Save(ctx, &d, j)
+	meta := SaveDiffMeta{
+		Tier:         rec.Tier,
+		AnchorBlock:  rec.AnchorBlock,
+		SamplingSeed: rec.SamplingSeed,
+	}
+	if meta.Tier == 0 {
+		meta.Tier = rec.Discrepancy.Metric.Capability.Tier()
+	}
+	newID, err := uc.Diffs.Save(ctx, &d, j, meta)
 	if err != nil {
 		return ReplayResult{}, fmt.Errorf("replay diff: save: %w", err)
 	}

@@ -30,7 +30,7 @@ func seedDiff(t *testing.T, repo *testsupport.FakeDiffRepo, runID verification.R
 	)
 	require.NoError(t, err)
 	j := diff.Judgement{Severity: sev, Reasoning: "test"}
-	id, err := repo.Save(context.Background(), &d, j)
+	id, err := repo.Save(context.Background(), &d, j, application.SaveDiffMeta{})
 	require.NoError(t, err)
 	return id
 }
