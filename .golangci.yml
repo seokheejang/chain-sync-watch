@@ -83,12 +83,14 @@ linters:
           files:
             - "**/internal/application/**"
             - "!**/*_test.go"
+            - "!**/testsupport/**"
           allow:
             - "$gostd"
             - "github.com/seokheejang/chain-sync-watch/internal/chain"
             - "github.com/seokheejang/chain-sync-watch/internal/source"
             - "github.com/seokheejang/chain-sync-watch/internal/verification"
             - "github.com/seokheejang/chain-sync-watch/internal/diff"
+            - "github.com/seokheejang/chain-sync-watch/internal/application"
           deny:
             - pkg: "gorm.io/gorm"
               desc: "application must not depend on ORMs — use RunRepository/DiffRepository ports"
