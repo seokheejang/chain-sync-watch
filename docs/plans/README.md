@@ -47,10 +47,10 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-20 (Phase 3D+3E 완료 시점)
-**현재 단계**: **Phase 3 거의 완료 — 3F(etherscan) 보류, 3G(custom-graphql 예시) 남음 → Phase 4 진입 준비**
+**최종 업데이트**: 2026-04-21 (Phase 6 완료 시점)
+**현재 단계**: **Phase 6 완료 — Postgres+gorm repository + cmd/csw migrate CLI까지 배선됨. 다음은 Phase 7 (asynq queue/scheduler + RateLimitBudget 활성화 + 4-stratum sampling)**
 
-### 완료 (committed, origin/main 대비 10 커밋 앞섬)
+### 완료 (committed, origin/main 대비 14 커밋 앞섬)
 
 | 구분 | 커밋 |
 |---|---|
@@ -60,7 +60,7 @@ examples/
 | 테스트 fixture 합성화 + Ralph 셀프 리뷰 | `725b063` · `f939232` |
 | CLAUDE.md rule 6 (.env secret 비재출력) | `6d27c4c` |
 | 외부 API 커버리지 리서치 | `50b3771` |
-| 3-tier 모델 + anchor 전략 문서 (Phase 2C/3/7 doc) | `c82e62e` |
+| 3-tier 모델 + anchor 전략 문서 | `c82e62e` |
 | Open Q A 5항목 curl 검증 결과 | `79256fe` |
 | **Phase 2C** — Tier / BlockTag / ReflectedBlock / Capability 4종 | `96f8803` |
 | Lint false-positive suppression | `099c377` |
@@ -69,38 +69,58 @@ examples/
 | **Phase 3C** — `adapters/internal/ethscan/` | `4639321` |
 | CLAUDE.md rule 7 (레이어별 comment discipline) | `b0ffde3` |
 | **Phase 3D + 3E** — `adapters/blockscout/` + `adapters/routescan/` | `679dd61` |
+| **Phase 4** — `verification/` + `diff/` 순수 도메인 (Metric / Sampling / Trigger / Run / Tolerance / Judgement) | `9cd1ce5` |
+| **Phase 5A** — application ports / errors / testsupport fakes / ScheduleRun / QueryRuns / QueryDiffs | `3eb9d9a` |
+| **Phase 5B + 5C** — ExecuteRun 엔진 + ReplayDiff (BlockImmutable 전용 MVP) | `a8f29c2` |
+| **Phase 6** — `cmd/csw migrate` CLI + golang-migrate 임베드 + `internal/infrastructure/persistence/` gorm 구현체 + testcontainers 통합 테스트 | `173193f` |
 
 ### 진행 중
 
-- 없음. origin/main 대비 10 커밋 앞섬 — push는 사용자 판단에 맡김.
+- 없음. origin/main 대비 14 커밋 앞섬 — push는 사용자 판단에 맡김.
 
-### 남은 Phase 3 잔여
+### 남은 잔여 & 미구현
 
 - **Phase 3F `adapters/etherscan/`** → **post-MVP로 연기**. Free tier가 Optimism 미커버라 MVP에서 가치 없음. Ethereum mainnet 확장 시점에 구현 (ethscan.Client 재사용이라 1일 이내 추정).
-- **Phase 3G `examples/custom-graphql-adapter/`** → 간단 스켈레톤만 (README + 50줄 골격). 다음 세션 착수 후보.
+- **Phase 3G `examples/custom-graphql-adapter/`** → 간단 스켈레톤. Phase 4/5 도메인 확정 후 작성하면 예시가 실제와 일치 (Phase 7/8 즈음에 끼워넣기 좋음).
+- **Phase 5B MVP 한계 — Phase 7에서 해소**:
+  - `ExecuteRun` / `ReplayDiff` 모두 **BlockImmutable 지표만** 비교. AddressLatest / AddressAtBlock은 주소 샘플링 필요, Snapshot은 Observational.
+  - Tolerance 해석은 Raw 문자열 equality 고정. `ToleranceResolver` 포트는 per-metric slack 필요해질 때 추가.
+  - `RateLimitBudget` 포트는 정의만 — 아직 호출부 없음 (Tier A 전수 모드만 동작).
+  - 4-stratum 샘플링 (known / top-N / random / recently-active)은 Phase 7로 일괄 연기.
+- **Phase 6 잔여 — Phase 7/10에서 해소**:
+  - `DiffRepository.Save` 서명이 Tier/AnchorBlock/SamplingSeed를 받지 않음. 현재 mapper는 Tier만 `Capability.Tier()`로 파생. AnchorBlock/SamplingSeed는 nullable 유지 → Phase 7 ExecuteRun 확장 시점에 Save 시그니처 재검토.
+  - 사용자 정의 Metric 영속화 미지원 — mapper는 `verification.AllMetrics()` 카탈로그 키만 인식. 필요 시 `metric_category` 컬럼을 함께 저장하고 Metric 재구성 로직 추가.
+  - 통합 테스트는 `-tags=integration` + Docker 필요. CI 파이프라인(Phase 10)에서 자동 실행되게 훅 걸어야 함.
 
 ### 다음 세션 재개 절차
 
-1. (선택) **Phase 3G** — `examples/custom-graphql-adapter/` 스켈레톤
-2. **Phase 4 착수** — `internal/verification/` + `internal/diff/` 도메인. Phase 2C의 `Tolerance.Judge(ctx CompareContext)` 확장 시그니처 + `AnchorWindowed` / `Observational` Tolerance + MetricCategory ↔ Tier 매핑이 이미 [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) 에 반영됨
-3. 이후 Phase 5 (Application use case: Tier 분기 + SamplingStrategy + RateLimitBudget port)
+1. **Phase 7 착수** — `internal/infrastructure/queue/` (asynq) + scheduler + RateLimitBudget 구현체 + 4-stratum sampling. [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) 참조.
+2. 이후 Phase 8 (huma HTTP API) → Phase 9 (Next.js) → Phase 10 (observability + docker-compose 통합) → Phase 11 (Helm).
+3. (선택) 중간 어느 시점에 Phase 3G 작성. Phase 5/6 구조가 안정화된 지금이 실제 예시 작성에 좋은 타이밍.
 
 ### 확정 결정 (구현 완료된 것 포함)
 
 - **3-tier 모델** ✅ 구현: Tier A(RPC 전수) / Tier B(3rd-party 샘플링) / Tier C(지표별) — `internal/source/tier.go` + `Capability.Tier()`
-- **anchor 전략** ✅ 구현 기반: `BlockTag` 값객체 · `ResultMeta.ReflectedBlock` · Blockscout `block_number_balance_updated_at` 실측 반영
-- **4-stratum 샘플링**: Phase 5에서 구현 예정
+- **anchor 전략** ✅ 구현: `BlockTag` 값객체 · `CompareContext.Anchor/AnchorBlock` · `ResultMeta.ReflectedBlock` · Blockscout `block_number_balance_updated_at` 실측 반영
+- **4-stratum 샘플링**: Phase 7에서 구현 예정 (Phase 5 초기 계획에서 이동)
 - **기본 OSS 공개 구성 = User-RPC(archive) + Blockscout + Routescan** 3-way ✅ 모든 어댑터 구현 완료
 - **Routescan-specific 성과**: `account/balancehistory` Optimism free 동작 → Tier A fallback 경로 확보
 - **Blockscout 스팸 필터**: `is_scam` / `reputation != "ok"` 토큰 자동 제외 (ERC-20 holdings)
+- **MetricCategory ↔ Severity 기본 매핑** ✅ 구현: BlockImmutable/AddressAtBlock → Critical, AddressLatest → Warning, Snapshot → Info (`diff.DefaultPolicy`)
+- **신뢰 클러스터 선정** ✅ 구현: `DefaultPolicy.SourceTrust` 리스트에서 가장 높은 우선순위 소스가 속한 클러스터가 trusted. 랭크된 소스 없으면 최대 클러스터(lex tiebreak).
+- **영속화 도구 선택** ✅: golang-migrate (embedded) + gorm + lib/pq. AutoMigrate 금지.
+- **testcontainers 전략** ✅: `TestMain` 1회 기동 + 케이스간 TRUNCATE. `-tags=integration`로 기본 CI에서는 분리.
 - **L2 특이필드**: backlog 유지 (post-MVP)
-- **indexer Capability 선언**: 필요 시 Phase 4/5에서 도입
+- **indexer Capability 선언**: 필요 시 Phase 7에서 도입
 
-### Open Items — Phase 4/5 착수 전 확정 필요
+### Open Items — Phase 7 착수 전 확정 필요
 
-- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용") — Phase 4 `JudgementPolicy` 설계에서 결정
-- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail) — Phase 7에서 실제 config 노출
+- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용") — Phase 7 실제 비교 시점에 결정. Phase 4 `DefaultPolicy`는 Snapshot을 Info로 고정했지만 per-metric override 필요할 수 있음.
+- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail) — Phase 7 config에 노출
 - [ ] Blockscout `bypass-429-option` 토큰 취득 절차 (실제 429 히트 시점에 실험)
+- [ ] `DiffRepository.Save` 시그니처 확장 여부 — Tier/AnchorBlock/SamplingSeed를 Save에 인자로 넣을지, 혹은 `SaveWithMeta` 별도 메서드로 둘지. Phase 7 ExecuteRun 업데이트 때 결정.
+- [ ] `ToleranceResolver` 포트 도입 시점 — NumericTolerance/AnchorWindowed가 per-metric으로 필요해지는 순간. Phase 7 AddressLatest 비교 착수와 맞물림.
+- [ ] Go 툴체인 `covdata` 바이너리 누락 우회 — 현재 3개 패키지에 trivial smoke test로 회피. 장기적으로 Makefile `test` 타겟 재작성 (예: `-coverpkg` 지정) 검토.
 
 ---
 
@@ -119,10 +139,10 @@ examples/
 | 3E | `adapters/routescan/` (Etherscan-compat) | ✅ Done | 3C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
 | 3F | `adapters/etherscan/` | ⏸️ Deferred (post-MVP, ETH-mainnet 확장 시) | 3C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
 | 3G | `examples/custom-graphql-adapter/` | ⬜ Not started | 2C | [phase-03-source-adapters.md](./phase-03-source-adapters.md) |
-| 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ⬜ Not started | 1, 2C | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
-| 5 | Application (use case) | ⬜ Not started | 2, 4 | [phase-05-application.md](./phase-05-application.md) |
-| 6 | Persistence (Postgres + gorm) | ⬜ Not started | 4, 5 | [phase-06-persistence.md](./phase-06-persistence.md) |
-| 7 | Queue / Scheduler (Redis + asynq) | ⬜ Not started | 5 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ✅ Done | 1, 2C | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
+| 5 | Application (use case) — 5A/5B/5C 완료 (ExecuteRun은 BlockImmutable MVP) | ✅ Done (MVP) | 2, 4 | [phase-05-application.md](./phase-05-application.md) |
+| 6 | Persistence (Postgres + gorm + golang-migrate + testcontainers) | ✅ Done | 4, 5 | [phase-06-persistence.md](./phase-06-persistence.md) |
+| 7 | Queue / Scheduler (Redis + asynq) — 4-stratum sampling, RateLimitBudget, ToleranceResolver 도입 | ⬜ Not started | 5 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 8 | HTTP API (chi + huma) | ⬜ Not started | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
