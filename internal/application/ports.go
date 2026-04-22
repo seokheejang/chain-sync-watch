@@ -164,3 +164,24 @@ type RateLimitBudget interface {
 	Reserve(ctx context.Context, sourceID source.SourceID, n int) error
 	Refund(ctx context.Context, sourceID source.SourceID, n int) error
 }
+
+// AddressSampler resolves a verification.AddressSamplingPlan into a
+// concrete address list at a specific anchor block. Execution lives
+// at this port rather than on the plan value because three of the
+// four stratums (top_n, random, recently_active) need external
+// queries — top holders by balance, random selection over a live
+// candidate pool, RPC block scans for recent activity. Only the
+// known stratum is purely domain-computable; implementations are
+// free to short-circuit that case.
+//
+// Implementations must be deterministic for plans that carry a Seed
+// (RandomAddresses, RecentlyActive) so operators can replay a Run's
+// exact sample set from the persisted seed.
+type AddressSampler interface {
+	Sample(
+		ctx context.Context,
+		chainID chain.ChainID,
+		plan verification.AddressSamplingPlan,
+		at chain.BlockNumber,
+	) ([]chain.Address, error)
+}

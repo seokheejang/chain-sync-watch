@@ -2,6 +2,7 @@ package testsupport_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/seokheejang/chain-sync-watch/internal/application/testsupport"
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/source"
+	"github.com/seokheejang/chain-sync-watch/internal/verification"
 )
 
 func TestFakeClock_AdvanceAndSet(t *testing.T) {
@@ -45,4 +47,49 @@ func TestFakeRateLimitBudget_ReserveExhaustion(t *testing.T) {
 
 	require.NoError(t, b.Refund(context.Background(), "rpc", 1))
 	require.Equal(t, 2, b.Remaining("rpc"))
+}
+
+func TestFakeAddressSampler_SampleReturnsConfiguredList(t *testing.T) {
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+	s := testsupport.NewFakeAddressSampler()
+	s.Results[verification.KindTopNHolders] = []chain.Address{a, b}
+
+	got, err := s.Sample(context.Background(), chain.OptimismMainnet, verification.TopNHolders{N: 10}, 100)
+	require.NoError(t, err)
+	require.Equal(t, []chain.Address{a, b}, got)
+
+	require.Len(t, s.Calls, 1)
+	require.Equal(t, verification.KindTopNHolders, s.Calls[0].Kind)
+	require.Equal(t, chain.BlockNumber(100), s.Calls[0].At)
+}
+
+func TestFakeAddressSampler_MissingKindReturnsNil(t *testing.T) {
+	s := testsupport.NewFakeAddressSampler()
+	got, err := s.Sample(context.Background(), chain.OptimismMainnet, verification.KnownAddresses{}, 0)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestFakeAddressSampler_ErrorInjection(t *testing.T) {
+	sentinel := errors.New("boom")
+	s := testsupport.NewFakeAddressSampler()
+	s.Err = sentinel
+
+	_, err := s.Sample(context.Background(), chain.OptimismMainnet, verification.RandomAddresses{Count: 5, Seed: 1}, 0)
+	require.ErrorIs(t, err, sentinel)
+}
+
+func TestFakeAddressSampler_ReturnsDefensiveCopy(t *testing.T) {
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	s := testsupport.NewFakeAddressSampler()
+	s.Results[verification.KindKnownAddresses] = []chain.Address{a}
+
+	got, err := s.Sample(context.Background(), chain.OptimismMainnet, verification.KnownAddresses{}, 0)
+	require.NoError(t, err)
+	got[0] = chain.Address{}
+
+	again, err := s.Sample(context.Background(), chain.OptimismMainnet, verification.KnownAddresses{}, 0)
+	require.NoError(t, err)
+	require.Equal(t, a, again[0])
 }
