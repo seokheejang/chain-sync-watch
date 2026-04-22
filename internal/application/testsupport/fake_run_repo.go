@@ -13,9 +13,15 @@ import (
 // design — state transitions call Save repeatedly for the same
 // RunID. Duplicate detection for new runs is the ScheduleRun use
 // case's responsibility (it checks FindByID first).
+//
+// SaveErr lets tests inject a transient Save failure (e.g., to
+// verify retry classification on the scheduled-run handler path).
+// When non-nil it is returned verbatim from every Save call and no
+// mutation happens.
 type FakeRunRepo struct {
-	mu   sync.Mutex
-	byID map[verification.RunID]*verification.Run
+	mu      sync.Mutex
+	byID    map[verification.RunID]*verification.Run
+	SaveErr error
 }
 
 // NewFakeRunRepo returns an empty FakeRunRepo.
@@ -23,10 +29,14 @@ func NewFakeRunRepo() *FakeRunRepo {
 	return &FakeRunRepo{byID: map[verification.RunID]*verification.Run{}}
 }
 
-// Save persists r. Create or update; never errors on duplicate ID.
+// Save persists r. Create or update; never errors on duplicate ID
+// unless SaveErr is set.
 func (f *FakeRunRepo) Save(_ context.Context, r *verification.Run) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.SaveErr != nil {
+		return f.SaveErr
+	}
 	f.byID[r.ID()] = r
 	return nil
 }

@@ -85,10 +85,10 @@ func runMigrations(dsn string) error {
 	return nil
 }
 
-// resetDB wipes both tables between test cases.
+// resetDB wipes every table between test cases.
 func resetDB(t *testing.T) {
 	t.Helper()
-	if err := testDB.Exec("TRUNCATE runs, discrepancies RESTART IDENTITY CASCADE").Error; err != nil {
+	if err := testDB.Exec("TRUNCATE runs, discrepancies, schedules RESTART IDENTITY CASCADE").Error; err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 }

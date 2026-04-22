@@ -13,14 +13,16 @@ import (
 // ID is optional — an empty value asks the use case to generate a
 // fresh RunID. Schedule is required only when Trigger is a
 // ScheduledTrigger; it is ignored for ManualTrigger and
-// RealtimeTrigger.
+// RealtimeTrigger. AddressPlans is optional — zero plans disables
+// the AddressLatest stratum for the resulting Run.
 type ScheduleRunInput struct {
-	ID       verification.RunID
-	ChainID  chain.ChainID
-	Strategy verification.SamplingStrategy
-	Metrics  []verification.Metric
-	Trigger  verification.Trigger
-	Schedule verification.Schedule
+	ID           verification.RunID
+	ChainID      chain.ChainID
+	Strategy     verification.SamplingStrategy
+	Metrics      []verification.Metric
+	Trigger      verification.Trigger
+	Schedule     verification.Schedule
+	AddressPlans []verification.AddressSamplingPlan
 }
 
 // ScheduleRunResult is the successful return of ScheduleRun.
@@ -74,7 +76,7 @@ func (uc ScheduleRun) Execute(ctx context.Context, in ScheduleRunInput) (Schedul
 	}
 
 	now := uc.Clock.Now()
-	r, err := verification.NewRun(id, in.ChainID, in.Strategy, in.Metrics, in.Trigger, now)
+	r, err := verification.NewRun(id, in.ChainID, in.Strategy, in.Metrics, in.Trigger, now, in.AddressPlans...)
 	if err != nil {
 		return ScheduleRunResult{}, fmt.Errorf("%w: %w", ErrInvalidRun, err)
 	}
@@ -92,9 +94,10 @@ func (uc ScheduleRun) Execute(ctx context.Context, in ScheduleRunInput) (Schedul
 
 	case verification.ScheduledTrigger:
 		jobID, err := uc.Dispatcher.ScheduleRecurring(ctx, in.Schedule, SchedulePayload{
-			ChainID:  in.ChainID,
-			Metrics:  in.Metrics,
-			Strategy: in.Strategy,
+			ChainID:      in.ChainID,
+			Metrics:      in.Metrics,
+			Strategy:     in.Strategy,
+			AddressPlans: in.AddressPlans,
 		})
 		if err != nil {
 			return ScheduleRunResult{}, fmt.Errorf("schedule run: schedule: %w", err)

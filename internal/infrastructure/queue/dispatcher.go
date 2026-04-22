@@ -4,14 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/verification"
 )
 
@@ -34,29 +33,35 @@ func defaultEnqueueOptions() EnqueueOptions {
 	}
 }
 
-// Dispatcher wires the JobDispatcher port to asynq. Recurring
-// jobs live in an in-memory store the scheduler polls; CancelScheduled
-// simply drops the entry and the PeriodicTaskManager stops firing
-// at the next sync tick.
-//
-// Limitation (Phase 7A): the recurring-job store is process-local.
-// Running csw-server and csw-worker as separate processes means
-// ScheduleRecurring from the server will not propagate to the
-// worker without a shared persistence layer. Phase 7B/7C revisits
-// this with a Postgres-backed ConfigProvider.
+// providerTimeout bounds the GetConfigs() query the asynq scheduler
+// issues every SyncInterval (default 10s). A Postgres round-trip on
+// a healthy cluster finishes in well under a second; this is the
+// belt-and-braces ceiling to avoid blocking the scheduler loop on
+// an unresponsive DB.
+const providerTimeout = 5 * time.Second
+
+// Dispatcher wires the JobDispatcher port to asynq. Recurring jobs
+// are persisted via ScheduleRepository so csw-server writes and
+// csw-worker reads converge on the same view even across restarts —
+// the DB replaces the in-memory scheduleStore Phase 7A used for
+// prototyping.
 type Dispatcher struct {
-	client *asynq.Client
-	store  *scheduleStore
-	opts   EnqueueOptions
+	client    *asynq.Client
+	schedules application.ScheduleRepository
+	opts      EnqueueOptions
+	clock     func() time.Time
 }
 
 // NewDispatcher builds a Dispatcher around the given Redis
-// connection options.
-func NewDispatcher(opt asynq.RedisConnOpt) *Dispatcher {
+// connection options. ScheduleRepository is required — passing nil
+// disables ScheduleRecurring (documented behaviour to catch mis-
+// configured tests; production always supplies a real repo).
+func NewDispatcher(opt asynq.RedisConnOpt, schedules application.ScheduleRepository) *Dispatcher {
 	return &Dispatcher{
-		client: asynq.NewClient(opt),
-		store:  newScheduleStore(),
-		opts:   defaultEnqueueOptions(),
+		client:    asynq.NewClient(opt),
+		schedules: schedules,
+		opts:      defaultEnqueueOptions(),
+		clock:     time.Now,
 	}
 }
 
@@ -77,14 +82,28 @@ func (d *Dispatcher) WithOptions(o EnqueueOptions) *Dispatcher {
 	return d
 }
 
+// WithClock overrides the wall clock used when stamping
+// ScheduleRecord.CreatedAt. Tests use it to make CreatedAt
+// deterministic; production leaves the default time.Now.
+func (d *Dispatcher) WithClock(now func() time.Time) *Dispatcher {
+	if now != nil {
+		d.clock = now
+	}
+	return d
+}
+
 // Close releases the underlying asynq client.
 func (d *Dispatcher) Close() error { return d.client.Close() }
 
-// ConfigProvider exposes the in-memory schedule store so the
-// PeriodicTaskManager can poll it. The worker wires this up during
-// startup.
+// ConfigProvider returns an asynq.PeriodicTaskConfigProvider backed
+// by the injected ScheduleRepository. The Scheduler polls this on
+// every SyncInterval; on each poll we translate active records into
+// asynq.PeriodicTaskConfig entries.
 func (d *Dispatcher) ConfigProvider() asynq.PeriodicTaskConfigProvider {
-	return d.store
+	return &dbConfigProvider{
+		schedules: d.schedules,
+		opts:      d.opts,
+	}
 }
 
 // EnqueueRunExecution implements application.JobDispatcher.
@@ -100,9 +119,9 @@ func (d *Dispatcher) EnqueueRunExecution(ctx context.Context, runID verification
 	return nil
 }
 
-// ScheduleRecurring registers a cron-driven job with the in-memory
-// ConfigProvider. The worker's PeriodicTaskManager picks it up on
-// the next sync tick.
+// ScheduleRecurring persists a ScheduleRecord so the ConfigProvider
+// picks it up on the next sync tick. The returned JobID is the
+// primary key — callers can later pass it to CancelScheduled.
 func (d *Dispatcher) ScheduleRecurring(
 	ctx context.Context,
 	schedule verification.Schedule,
@@ -111,51 +130,42 @@ func (d *Dispatcher) ScheduleRecurring(
 	if schedule.IsZero() {
 		return "", fmt.Errorf("queue: schedule_recurring: empty schedule")
 	}
+	if d.schedules == nil {
+		return "", fmt.Errorf("queue: schedule_recurring: no schedule repository wired")
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	metricKeys := make([]string, len(payload.Metrics))
-	for i, m := range payload.Metrics {
-		metricKeys[i] = m.Key
-	}
-	strategyKind := payload.Strategy.Kind()
-	// The strategy body is serialised as an opaque blob; the
-	// handler will decode it via the same persistence helpers the
-	// repository uses.
-	strategyData, err := json.Marshal(payload.Strategy)
-	if err != nil {
-		return "", fmt.Errorf("queue: encode strategy: %w", err)
-	}
-
-	body, err := ScheduledRunPayload{
-		ChainID:      payload.ChainID.Uint64(),
-		StrategyKind: strategyKind,
-		StrategyData: strategyData,
-		MetricKeys:   metricKeys,
-		CronExpr:     schedule.CronExpr(),
-	}.Marshal()
-	if err != nil {
-		return "", err
-	}
-
-	task := asynq.NewTask(TaskTypeScheduledRun, body, d.taskOptions()...)
 	id, err := newJobID()
 	if err != nil {
 		return "", err
 	}
-	d.store.add(id, &asynq.PeriodicTaskConfig{
-		Cronspec: schedule.CronExpr(),
-		Task:     task,
-	})
+	record := application.ScheduleRecord{
+		JobID:        id,
+		ChainID:      payload.ChainID,
+		Schedule:     schedule,
+		Strategy:     payload.Strategy,
+		Metrics:      payload.Metrics,
+		AddressPlans: payload.AddressPlans,
+		CreatedAt:    d.clock(),
+		Active:       true,
+	}
+	if err := d.schedules.Save(ctx, record); err != nil {
+		return "", fmt.Errorf("queue: schedule_recurring save: %w", err)
+	}
 	return id, nil
 }
 
-// CancelScheduled drops a recurring job from the ConfigProvider.
-// Already-fired tasks continue to process to completion.
-func (d *Dispatcher) CancelScheduled(_ context.Context, id application.JobID) error {
-	if !d.store.remove(id) {
-		return fmt.Errorf("queue: cancel_scheduled: unknown job id %q", id)
+// CancelScheduled soft-deletes the schedule. The PeriodicTaskManager
+// stops emitting the task at the next sync tick; rows already in
+// flight complete normally.
+func (d *Dispatcher) CancelScheduled(ctx context.Context, id application.JobID) error {
+	if d.schedules == nil {
+		return fmt.Errorf("queue: cancel_scheduled: no schedule repository wired")
+	}
+	if err := d.schedules.Deactivate(ctx, id); err != nil {
+		return fmt.Errorf("queue: cancel_scheduled: %w", err)
 	}
 	return nil
 }
@@ -169,43 +179,92 @@ func (d *Dispatcher) taskOptions() []asynq.Option {
 	}
 }
 
-// --- scheduleStore -------------------------------------------------
+// --- dbConfigProvider ----------------------------------------------
 
-// scheduleStore is an in-memory map of JobID → PeriodicTaskConfig.
-// It satisfies asynq.PeriodicTaskConfigProvider so the worker can
-// feed it straight into a PeriodicTaskManager.
-type scheduleStore struct {
-	mu      sync.RWMutex
-	configs map[application.JobID]*asynq.PeriodicTaskConfig
+// dbConfigProvider satisfies asynq.PeriodicTaskConfigProvider by
+// reading active ScheduleRecords from the repository on each call
+// and rendering them as asynq.PeriodicTaskConfig entries.
+//
+// GetConfigs runs on the scheduler's polling cadence (SyncInterval
+// — 10s default) so the cost is dominated by one indexed SELECT
+// per poll. The provider is stateless: a new process reconstructs
+// the full schedule view from the first GetConfigs call.
+type dbConfigProvider struct {
+	schedules application.ScheduleRepository
+	opts      EnqueueOptions
 }
 
-func newScheduleStore() *scheduleStore {
-	return &scheduleStore{configs: map[application.JobID]*asynq.PeriodicTaskConfig{}}
-}
-
-func (s *scheduleStore) add(id application.JobID, cfg *asynq.PeriodicTaskConfig) {
-	s.mu.Lock()
-	s.configs[id] = cfg
-	s.mu.Unlock()
-}
-
-func (s *scheduleStore) remove(id application.JobID) bool {
-	s.mu.Lock()
-	_, ok := s.configs[id]
-	delete(s.configs, id)
-	s.mu.Unlock()
-	return ok
-}
-
-// GetConfigs satisfies asynq.PeriodicTaskConfigProvider.
-func (s *scheduleStore) GetConfigs() ([]*asynq.PeriodicTaskConfig, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*asynq.PeriodicTaskConfig, 0, len(s.configs))
-	for _, c := range s.configs {
-		out = append(out, c)
+// GetConfigs queries ListActive and renders the result as asynq
+// periodic task configs. Records whose payload cannot be rebuilt
+// (unknown strategy kind, dropped metric catalog entry) are skipped
+// — surfacing them as a scheduler-loop failure would block every
+// healthy schedule. The persistence layer already enforces schema
+// shape, so malformed records here indicate a deliberate rename
+// the operator needs to reconcile.
+func (p *dbConfigProvider) GetConfigs() ([]*asynq.PeriodicTaskConfig, error) {
+	if p.schedules == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), providerTimeout)
+	defer cancel()
+	records, err := p.schedules.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("queue: provider list_active: %w", err)
+	}
+	out := make([]*asynq.PeriodicTaskConfig, 0, len(records))
+	for _, r := range records {
+		task, err := buildScheduledRunTask(r, p.opts)
+		if err != nil {
+			continue
+		}
+		out = append(out, &asynq.PeriodicTaskConfig{
+			Cronspec: r.Schedule.CronExpr(),
+			Task:     task,
+		})
 	}
 	return out, nil
+}
+
+// buildScheduledRunTask renders a ScheduleRecord into the asynq
+// Task the PeriodicTaskManager will enqueue on every fire. The
+// output lives inside asynq's Redis representation so the payload
+// format must round-trip through the same serialise helpers the
+// runs table uses — callers decode with persistence.UnmarshalStrategy
+// and persistence.UnmarshalAddressPlans.
+func buildScheduledRunTask(r application.ScheduleRecord, opts EnqueueOptions) (*asynq.Task, error) {
+	stratData, err := persistence.MarshalStrategy(r.Strategy)
+	if err != nil {
+		return nil, fmt.Errorf("queue: build scheduled_run strategy: %w", err)
+	}
+	planData, err := persistence.MarshalAddressPlans(r.AddressPlans)
+	if err != nil {
+		return nil, fmt.Errorf("queue: build scheduled_run plans: %w", err)
+	}
+	metricKeys := make([]string, len(r.Metrics))
+	for i, m := range r.Metrics {
+		metricKeys[i] = m.Key
+	}
+	body, err := ScheduledRunPayload{
+		ChainID:          r.ChainID.Uint64(),
+		StrategyKind:     r.Strategy.Kind(),
+		StrategyData:     stratData,
+		MetricKeys:       metricKeys,
+		AddressPlansData: planData,
+		CronExpr:         r.Schedule.CronExpr(),
+	}.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("queue: build scheduled_run payload: %w", err)
+	}
+	return asynq.NewTask(TaskTypeScheduledRun, body, taskOptionsFrom(opts)...), nil
+}
+
+func taskOptionsFrom(o EnqueueOptions) []asynq.Option {
+	return []asynq.Option{
+		asynq.MaxRetry(o.MaxRetry),
+		asynq.Timeout(o.Timeout),
+		asynq.Retention(o.Retention),
+		asynq.Queue(o.Queue),
+	}
 }
 
 // --- JobID generator -----------------------------------------------

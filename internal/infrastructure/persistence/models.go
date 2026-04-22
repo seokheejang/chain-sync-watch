@@ -59,3 +59,27 @@ type diffModel struct {
 
 // TableName returns the fixed table name.
 func (diffModel) TableName() string { return "discrepancies" }
+
+// scheduleModel mirrors the `schedules` table. job_id is the
+// primary key rather than an auto-increment id because the
+// Dispatcher assigns a random hex id and uses it as the asynq
+// cancellation key — upserts must key on the external id.
+//
+// Active is a soft-delete flag; CancelScheduled flips it to false
+// so the provider stops emitting the task at the next poll while
+// the audit trail (who cancelled what, when) survives.
+type scheduleModel struct {
+	JobID        string         `gorm:"primaryKey;column:job_id"`
+	ChainID      uint64         `gorm:"column:chain_id;not null"`
+	CronExpr     string         `gorm:"column:cron_expr;not null"`
+	Timezone     string         `gorm:"column:timezone;not null;default:'UTC'"`
+	StrategyKind string         `gorm:"column:strategy_kind;not null"`
+	StrategyData []byte         `gorm:"column:strategy_data;type:jsonb;not null"`
+	AddressPlans []byte         `gorm:"column:address_plans;type:jsonb;not null;default:'[]'::jsonb"`
+	Metrics      pq.StringArray `gorm:"column:metrics;type:text[];not null"`
+	Active       bool           `gorm:"column:active;not null;default:true"`
+	CreatedAt    time.Time      `gorm:"column:created_at;not null"`
+}
+
+// TableName pins the table name.
+func (scheduleModel) TableName() string { return "schedules" }

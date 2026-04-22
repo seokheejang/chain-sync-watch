@@ -80,17 +80,32 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	runs := persistence.NewRunRepo(db)
 	diffs := persistence.NewDiffRepo(db)
+	schedules := persistence.NewScheduleRepo(db)
+
+	clock := systemClock{}
+	dispatcher := queue.NewDispatcher(redisOpt, schedules)
+	defer func() { _ = dispatcher.Close() }()
 
 	exec := &application.ExecuteRun{
 		Runs:      runs,
 		Diffs:     diffs,
 		Sources:   nullGateway{},
 		ChainHead: nullChainHead{},
-		Clock:     systemClock{},
+		Clock:     clock,
 		Policy:    diff.DefaultPolicy{},
 	}
 
-	handlers := &queue.Handlers{ExecuteRun: exec, Logger: logger}
+	// Handlers also process TaskTypeScheduledRun — that path needs
+	// the Run repository (to persist the materialised Run), the
+	// Dispatcher (to kick off the follow-up ExecuteRun task), and
+	// the Clock (for CreatedAt stamping).
+	handlers := &queue.Handlers{
+		ExecuteRun: exec,
+		Runs:       runs,
+		Enqueuer:   dispatcher,
+		Clock:      clock,
+		Logger:     logger,
+	}
 	mux := asynq.NewServeMux()
 	handlers.Register(mux)
 
@@ -107,6 +122,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 	}()
 	logger.Info("health server ready", "addr", health.Addr())
+
+	scheduler, err := queue.NewScheduler(redisOpt, dispatcher.ConfigProvider(), queue.SchedulerOptions{})
+	if err != nil {
+		return fmt.Errorf("new scheduler: %w", err)
+	}
+	if err := scheduler.Start(); err != nil {
+		return fmt.Errorf("start scheduler: %w", err)
+	}
+	defer scheduler.Shutdown()
+	logger.Info("scheduler started")
 
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: envOrDefaultInt("CSW_WORKER_CONCURRENCY", 10),

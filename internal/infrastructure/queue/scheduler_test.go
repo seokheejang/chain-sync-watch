@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/application/testsupport"
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
 	"github.com/seokheejang/chain-sync-watch/internal/verification"
@@ -20,7 +21,7 @@ func TestScheduler_NilProviderRejected(t *testing.T) {
 
 func TestScheduler_StartShutdown(t *testing.T) {
 	opt, _ := startMiniRedis(t)
-	disp := queue.NewDispatcher(opt)
+	disp := queue.NewDispatcher(opt, testsupport.NewFakeScheduleRepo())
 	t.Cleanup(func() { _ = disp.Close() })
 
 	sched, err := verification.NewSchedule("*/5 * * * *", "UTC")
@@ -39,11 +40,11 @@ func TestScheduler_StartShutdown(t *testing.T) {
 }
 
 func TestScheduler_CompilesAgainstAsynqProvider(t *testing.T) {
-	// Type-assertion compile-check: the store returned by
+	// Type-assertion compile-check: the provider returned by
 	// Dispatcher.ConfigProvider() must satisfy the interface asynq
 	// expects from a PeriodicTaskManager.
 	opt, _ := startMiniRedis(t)
-	disp := queue.NewDispatcher(opt)
+	disp := queue.NewDispatcher(opt, testsupport.NewFakeScheduleRepo())
 	t.Cleanup(func() { _ = disp.Close() })
 
 	provider := disp.ConfigProvider()

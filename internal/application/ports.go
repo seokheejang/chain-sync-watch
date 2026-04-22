@@ -72,11 +72,13 @@ type JobID string
 // SchedulePayload carries the configuration a recurring job needs
 // to materialise a Run at firing time. The Trigger is filled in by
 // the scheduler itself (ScheduledTrigger with the cron expression
-// that fired).
+// that fired). AddressPlans is optional — zero plans means the
+// materialised Run will cover only block-immutable metrics.
 type SchedulePayload struct {
-	ChainID  chain.ChainID
-	Metrics  []verification.Metric
-	Strategy verification.SamplingStrategy
+	ChainID      chain.ChainID
+	Metrics      []verification.Metric
+	Strategy     verification.SamplingStrategy
+	AddressPlans []verification.AddressSamplingPlan
 }
 
 // --- Ports -----------------------------------------------------------
@@ -136,6 +138,45 @@ type JobDispatcher interface {
 	EnqueueRunExecution(ctx context.Context, runID verification.RunID) error
 	ScheduleRecurring(ctx context.Context, schedule verification.Schedule, payload SchedulePayload) (JobID, error)
 	CancelScheduled(ctx context.Context, id JobID) error
+}
+
+// ScheduleRecord is the persisted form of a cron-driven Run
+// configuration. Dispatcher.ScheduleRecurring materialises a record;
+// ScheduleRepository persists it; the DB-backed
+// PeriodicTaskConfigProvider reads active records back out so the
+// asynq scheduler sees the canonical view regardless of which
+// process wrote it — the very point of moving off the in-memory
+// store (Phase 7A) to this port (Phase 7E).
+//
+// Active=false is a soft-delete. Cancelled schedules stay in the
+// table for operator auditing (who scheduled what when, why it was
+// cancelled) instead of disappearing silently.
+type ScheduleRecord struct {
+	JobID        JobID
+	ChainID      chain.ChainID
+	Schedule     verification.Schedule
+	Strategy     verification.SamplingStrategy
+	Metrics      []verification.Metric
+	AddressPlans []verification.AddressSamplingPlan
+	CreatedAt    time.Time
+	Active       bool
+}
+
+// ScheduleRepository is the durable backing store for recurring job
+// configurations. Implementations must:
+//
+//   - Save: upsert keyed by JobID. Idempotent — re-saving the same
+//     record is a no-op.
+//   - Deactivate: flip Active to false for the given JobID. Missing
+//     id is not an error (CancelScheduled must be safe to call
+//     defensively after a crash-recovery loop).
+//   - ListActive: return only Active=true records, sorted by
+//     CreatedAt ascending so periodic-task ordering stays stable
+//     across polls.
+type ScheduleRepository interface {
+	Save(ctx context.Context, s ScheduleRecord) error
+	Deactivate(ctx context.Context, id JobID) error
+	ListActive(ctx context.Context) ([]ScheduleRecord, error)
 }
 
 // Clock is the time source used by use cases that need to stamp

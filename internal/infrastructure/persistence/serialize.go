@@ -108,6 +108,49 @@ func marshalStrategy(s verification.SamplingStrategy) ([]byte, error) {
 	return nil, fmt.Errorf("persistence: unknown strategy type %T", s)
 }
 
+// MarshalStrategy exposes the strategy marshaller so other
+// infrastructure packages (notably queue.Dispatcher, which embeds
+// a strategy into a scheduled-run payload) stay on the same wire
+// format as the runs.strategy_data column. Without this shared
+// path, the handler that decodes a scheduled-run payload would
+// need a second marshaller that drifted the moment we added a new
+// strategy kind.
+func MarshalStrategy(s verification.SamplingStrategy) ([]byte, error) {
+	return marshalStrategy(s)
+}
+
+// UnmarshalStrategy is the inverse: infrastructure packages that
+// receive a strategy blob (handlers, HTTP layer) can decode it
+// without re-implementing the kind switch.
+func UnmarshalStrategy(kind string, data []byte) (verification.SamplingStrategy, error) {
+	return unmarshalStrategy(kind, data)
+}
+
+// MetricByKey resolves a built-in metric key to its catalog entry.
+// Returns ok=false for keys that are not in verification.AllMetrics()
+// — callers treat that as a permanent "payload is corrupt" signal
+// (asynq.SkipRetry, HTTP 4xx, etc.).
+func MetricByKey(key string) (verification.Metric, bool) {
+	m, ok := metricByKey[key]
+	return m, ok
+}
+
+// MarshalAddressPlans / UnmarshalAddressPlans expose the plan
+// array marshaller so queue.Dispatcher can ride the same JSONB
+// format the runs.address_plans column uses. Without this, a
+// scheduled-run payload would need a second encoder and the
+// ScheduleRecord / Run persistence layers would drift the moment
+// we add a new plan stratum.
+func MarshalAddressPlans(plans []verification.AddressSamplingPlan) ([]byte, error) {
+	return marshalAddressPlans(plans)
+}
+
+// UnmarshalAddressPlans is the inverse — decodes the JSONB array
+// back to the domain slice. Both NULL and "[]" resolve to nil.
+func UnmarshalAddressPlans(data []byte) ([]verification.AddressSamplingPlan, error) {
+	return unmarshalAddressPlans(data)
+}
+
 func unmarshalStrategy(kind string, data []byte) (verification.SamplingStrategy, error) {
 	switch kind {
 	case verification.KindFixedList:

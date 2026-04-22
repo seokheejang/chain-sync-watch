@@ -160,6 +160,72 @@ func toDiffModel(d *diff.Discrepancy, j diff.Judgement, meta application.SaveDif
 	}, nil
 }
 
+// --- Schedule -------------------------------------------------------
+
+func toScheduleModel(s application.ScheduleRecord) (scheduleModel, error) {
+	stratData, err := marshalStrategy(s.Strategy)
+	if err != nil {
+		return scheduleModel{}, err
+	}
+	planData, err := marshalAddressPlans(s.AddressPlans)
+	if err != nil {
+		return scheduleModel{}, err
+	}
+	keys := make([]string, 0, len(s.Metrics))
+	for _, m := range s.Metrics {
+		keys = append(keys, m.Key)
+	}
+	tz := "UTC"
+	if s.Schedule.Timezone() != nil {
+		tz = s.Schedule.Timezone().String()
+	}
+	return scheduleModel{
+		JobID:        string(s.JobID),
+		ChainID:      s.ChainID.Uint64(),
+		CronExpr:     s.Schedule.CronExpr(),
+		Timezone:     tz,
+		StrategyKind: s.Strategy.Kind(),
+		StrategyData: stratData,
+		AddressPlans: planData,
+		Metrics:      keys,
+		Active:       s.Active,
+		CreatedAt:    s.CreatedAt,
+	}, nil
+}
+
+func toScheduleRecord(m scheduleModel) (application.ScheduleRecord, error) {
+	schedule, err := verification.NewSchedule(m.CronExpr, m.Timezone)
+	if err != nil {
+		return application.ScheduleRecord{}, fmt.Errorf("persistence: rehydrate schedule: %w", err)
+	}
+	strategy, err := unmarshalStrategy(m.StrategyKind, m.StrategyData)
+	if err != nil {
+		return application.ScheduleRecord{}, err
+	}
+	plans, err := unmarshalAddressPlans(m.AddressPlans)
+	if err != nil {
+		return application.ScheduleRecord{}, err
+	}
+	metrics := make([]verification.Metric, 0, len(m.Metrics))
+	for _, k := range m.Metrics {
+		met, ok := metricByKey[k]
+		if !ok {
+			return application.ScheduleRecord{}, fmt.Errorf("persistence: unknown metric key %q", k)
+		}
+		metrics = append(metrics, met)
+	}
+	return application.ScheduleRecord{
+		JobID:        application.JobID(m.JobID),
+		ChainID:      chain.ChainID(m.ChainID),
+		Schedule:     schedule,
+		Strategy:     strategy,
+		Metrics:      metrics,
+		AddressPlans: plans,
+		CreatedAt:    m.CreatedAt,
+		Active:       m.Active,
+	}, nil
+}
+
 func toDiffRecord(m diffModel) (application.DiffRecord, error) {
 	values, err := unmarshalValues(m.Values)
 	if err != nil {

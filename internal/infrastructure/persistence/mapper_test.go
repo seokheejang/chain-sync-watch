@@ -254,6 +254,143 @@ func TestRunRoundTrip_RejectsUnknownMetricKey(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown metric key")
 }
 
+func TestScheduleRoundTrip_BasicFields(t *testing.T) {
+	schedule, err := verification.NewSchedule("0 */6 * * *", "America/New_York")
+	require.NoError(t, err)
+	created := time.Date(2026, 4, 22, 10, 0, 0, 0, time.UTC)
+
+	orig := application.ScheduleRecord{
+		JobID:     "job-1",
+		ChainID:   chain.OptimismMainnet,
+		Schedule:  schedule,
+		Strategy:  verification.LatestN{N: 5},
+		Metrics:   []verification.Metric{verification.MetricBlockHash, verification.MetricBlockTimestamp},
+		CreatedAt: created,
+		Active:    true,
+	}
+
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.Equal(t, "job-1", m.JobID)
+	require.Equal(t, uint64(chain.OptimismMainnet), m.ChainID)
+	require.Equal(t, "0 */6 * * *", m.CronExpr)
+	require.Equal(t, "America/New_York", m.Timezone)
+	require.Equal(t, verification.KindLatestN, m.StrategyKind)
+	require.Equal(t, []string{"block.hash", "block.timestamp"}, []string(m.Metrics))
+	require.True(t, m.Active)
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.Equal(t, orig.JobID, got.JobID)
+	require.Equal(t, orig.ChainID, got.ChainID)
+	require.Equal(t, orig.Schedule.CronExpr(), got.Schedule.CronExpr())
+	require.Equal(t, "America/New_York", got.Schedule.Timezone().String())
+	require.Equal(t, orig.Active, got.Active)
+
+	strategy, ok := got.Strategy.(verification.LatestN)
+	require.True(t, ok)
+	require.Equal(t, uint(5), strategy.N)
+
+	require.Len(t, got.Metrics, 2)
+	require.Equal(t, verification.MetricBlockHash.Key, got.Metrics[0].Key)
+	require.Equal(t, verification.MetricBlockTimestamp.Key, got.Metrics[1].Key)
+}
+
+func TestScheduleRoundTrip_DeactivatedPreserved(t *testing.T) {
+	schedule, err := verification.NewSchedule("* * * * *", "UTC")
+	require.NoError(t, err)
+	orig := application.ScheduleRecord{
+		JobID:     "job-cancelled",
+		ChainID:   chain.OptimismMainnet,
+		Schedule:  schedule,
+		Strategy:  verification.LatestN{N: 1},
+		Metrics:   []verification.Metric{verification.MetricBlockHash},
+		CreatedAt: time.Now().UTC(),
+		Active:    false,
+	}
+
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.False(t, m.Active)
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.False(t, got.Active)
+}
+
+func TestScheduleRoundTrip_AddressPlans(t *testing.T) {
+	schedule, err := verification.NewSchedule("* * * * *", "UTC")
+	require.NoError(t, err)
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+	plans := []verification.AddressSamplingPlan{
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+		verification.RandomAddresses{Count: 10, Seed: 99},
+	}
+	orig := application.ScheduleRecord{
+		JobID:        "job-plans",
+		ChainID:      chain.OptimismMainnet,
+		Schedule:     schedule,
+		Strategy:     verification.LatestN{N: 3},
+		Metrics:      []verification.Metric{verification.MetricBalanceLatest},
+		AddressPlans: plans,
+		CreatedAt:    time.Now().UTC(),
+		Active:       true,
+	}
+
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.NotEqual(t, "[]", string(m.AddressPlans))
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.Len(t, got.AddressPlans, 2)
+	k, ok := got.AddressPlans[0].(verification.KnownAddresses)
+	require.True(t, ok)
+	require.Equal(t, []chain.Address{a, b}, k.Addresses)
+
+	rnd, ok := got.AddressPlans[1].(verification.RandomAddresses)
+	require.True(t, ok)
+	require.Equal(t, int64(99), rnd.Seed)
+}
+
+func TestScheduleRoundTrip_NoPlansEmptyArray(t *testing.T) {
+	schedule, err := verification.NewSchedule("* * * * *", "UTC")
+	require.NoError(t, err)
+	orig := application.ScheduleRecord{
+		JobID:     "job-none",
+		ChainID:   chain.OptimismMainnet,
+		Schedule:  schedule,
+		Strategy:  verification.LatestN{N: 1},
+		Metrics:   []verification.Metric{verification.MetricBlockHash},
+		CreatedAt: time.Now().UTC(),
+		Active:    true,
+	}
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(m.AddressPlans))
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.Nil(t, got.AddressPlans)
+}
+
+func TestScheduleRoundTrip_RejectsUnknownStrategyKind(t *testing.T) {
+	m := scheduleModel{
+		JobID:        "j",
+		ChainID:      10,
+		CronExpr:     "* * * * *",
+		Timezone:     "UTC",
+		StrategyKind: "not_a_real_kind",
+		StrategyData: []byte(`{}`),
+		Metrics:      []string{verification.MetricBlockHash.Key},
+		Active:       true,
+		CreatedAt:    time.Now().UTC(),
+	}
+	_, err := toScheduleRecord(m)
+	require.Error(t, err)
+}
+
 func TestDiffRoundTrip_BlockSubject(t *testing.T) {
 	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
 	rb := chain.BlockNumber(990)
