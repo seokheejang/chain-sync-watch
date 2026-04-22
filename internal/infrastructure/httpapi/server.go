@@ -39,9 +39,10 @@ type Config struct {
 // omits that resource's routes. Phase 8.1 shipped Health; Phase 8.2
 // adds Runs. Diffs / Schedules / Sources land in 8.3–8.5.
 type Deps struct {
-	Health routes.HealthDeps
-	Runs   routes.RunsDeps
-	Diffs  routes.DiffsDeps
+	Health    routes.HealthDeps
+	Runs      routes.RunsDeps
+	Diffs     routes.DiffsDeps
+	Schedules routes.SchedulesDeps
 }
 
 // NewServer constructs a ready-to-Serve *http.Server. The server
@@ -79,6 +80,7 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 	routes.RegisterHealth(api, deps.Health)
 	routes.RegisterRuns(api, deps.Runs)
 	routes.RegisterDiffs(api, deps.Diffs)
+	routes.RegisterSchedules(api, deps.Schedules)
 
 	return &http.Server{
 		Addr:              cfg.Addr,

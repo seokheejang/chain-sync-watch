@@ -183,7 +183,7 @@ examples/
 | 8.1 | HTTP API — server skeleton (chi + huma) + 미들웨어(requestid/logging/recover/cors) + /healthz /readyz + /openapi.json + cmd/csw-server | ✅ Done | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.2 | HTTP API — /runs 라우트 (POST/GET list/GET detail/POST cancel) + dto.{Sampling,Trigger,Schedule,AddressPlan}Input + CancelRun 유스케이스 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.3 | HTTP API — /diffs 라우트 (GET list/GET detail/POST replay) + /runs/{id}/diffs | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
-| 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + TokenPlans 라운드트립 | ⬜ Not started | 8.1, 7I.2 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + QuerySchedules 유스케이스 (TokenPlans 라운드트립은 7I.2에서) | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.5 | HTTP API — /sources 라우트 (capability matrix + tier) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
