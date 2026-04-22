@@ -47,10 +47,12 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-21 (Phase 6 완료 시점)
-**현재 단계**: **Phase 6 완료 — Postgres+gorm repository + cmd/csw migrate CLI까지 배선됨. 다음은 Phase 7 (asynq queue/scheduler + RateLimitBudget 활성화 + 4-stratum sampling)**
+**최종 업데이트**: 2026-04-22 (Phase 7A/7B/7C.1/7C.2/7C.3 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 7 진행 중 — asynq queue 배선 + RedisBudget + ToleranceResolver + DiffRepository.Save meta + AddressSamplingPlan 도메인 + AddressSampler 포트 + ExecuteRun AddressLatest 경로(+ Budget 통합) 완료. 다음은 Phase 7D (ScheduledRun 실구현 + durable schedule store)**
 
-### 완료 (committed, origin/main 대비 14 커밋 앞섬)
+> Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
+
+### 완료 (committed, origin/main 대비 16 커밋 앞섬)
 
 | 구분 | 커밋 |
 |---|---|
@@ -73,30 +75,41 @@ examples/
 | **Phase 5A** — application ports / errors / testsupport fakes / ScheduleRun / QueryRuns / QueryDiffs | `3eb9d9a` |
 | **Phase 5B + 5C** — ExecuteRun 엔진 + ReplayDiff (BlockImmutable 전용 MVP) | `a8f29c2` |
 | **Phase 6** — `cmd/csw migrate` CLI + golang-migrate 임베드 + `internal/infrastructure/persistence/` gorm 구현체 + testcontainers 통합 테스트 | `173193f` |
+| **Phase 7A** — asynq dispatcher + worker skeleton + handlers + scheduler + health endpoints | `48b8335` |
+| **Phase 7B** — RedisBudget for RateLimitBudget port | `72bb57d` |
+| **Phase 7C.1** — application.ToleranceResolver + DiffRepository.Save meta (Tier/AnchorBlock/SamplingSeed) | `d837cdc` |
+| **Phase 7C.2** — verification.AddressSamplingPlan 4종 (Known/TopN/Random/RecentlyActive) + application.AddressSampler 포트 + FakeAddressSampler | _uncommitted_ |
+| **Phase 7C.3** — Run.addressPlans + ExecuteRun AddressLatest 경로 (parallel fan-out, AnchorWindowed-ready snapshots, Budget reserve/refund) | _uncommitted_ |
 
 ### 진행 중
 
-- 없음. origin/main 대비 14 커밋 앞섬 — push는 사용자 판단에 맡김.
+- Phase 7D — `ScheduledRun` handler 실구현 (현재 7A stub). durable schedule store 설계 포함.
+- (follow-up) Run persistence 스키마에 `addressPlans` 열 추가 — 현재 mapper는 rehydrate 시 plans를 빈 슬라이스로 돌려주므로 enqueue → rehydrate → ExecuteRun 경로에서 AddressLatest 커버리지가 끊김. 인메모리 테스트는 정상 동작.
+- (follow-up) AddressAtBlock / ERC-20 balance+holdings / Snapshot 경로. 현재 ExecuteRun은 AddressLatest만 비교.
+- (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest fetch에만 적용됨.
 
 ### 남은 잔여 & 미구현
 
 - **Phase 3F `adapters/etherscan/`** → **post-MVP로 연기**. Free tier가 Optimism 미커버라 MVP에서 가치 없음. Ethereum mainnet 확장 시점에 구현 (ethscan.Client 재사용이라 1일 이내 추정).
 - **Phase 3G `examples/custom-graphql-adapter/`** → 간단 스켈레톤. Phase 4/5 도메인 확정 후 작성하면 예시가 실제와 일치 (Phase 7/8 즈음에 끼워넣기 좋음).
-- **Phase 5B MVP 한계 — Phase 7에서 해소**:
-  - `ExecuteRun` / `ReplayDiff` 모두 **BlockImmutable 지표만** 비교. AddressLatest / AddressAtBlock은 주소 샘플링 필요, Snapshot은 Observational.
-  - Tolerance 해석은 Raw 문자열 equality 고정. `ToleranceResolver` 포트는 per-metric slack 필요해질 때 추가.
-  - `RateLimitBudget` 포트는 정의만 — 아직 호출부 없음 (Tier A 전수 모드만 동작).
-  - 4-stratum 샘플링 (known / top-N / random / recently-active)은 Phase 7로 일괄 연기.
+- **Phase 7 잔여 (진행 중)**:
+  - **7C.2**: 4-stratum 주소 샘플링 (known / top-N / random / recently-active). `AddressSamplingPlan` 도메인 값객체 + `AddressSampler` 포트 + 인프라 구현체.
+  - **7C.3**: ExecuteRun AddressLatest / AddressAtBlock Tier B 경로 + budget `Reserve/Refund` 통합.
+  - **ScheduledRun handler 실구현** — 현재 7A stub. durable schedule store (Postgres `schedules` 테이블) + `HandleScheduledRun`이 payload로 Run을 materialize → ExecuteRun enqueue.
+  - **asynqmon / observability 7.6** — docker-compose override + 핸들러 metrics (성공/실패 카운트, 처리 시간).
 - **Phase 6 잔여 — Phase 7/10에서 해소**:
-  - `DiffRepository.Save` 서명이 Tier/AnchorBlock/SamplingSeed를 받지 않음. 현재 mapper는 Tier만 `Capability.Tier()`로 파생. AnchorBlock/SamplingSeed는 nullable 유지 → Phase 7 ExecuteRun 확장 시점에 Save 시그니처 재검토.
+  - ✅ `DiffRepository.Save` meta 확장 완료 (7C.1).
   - 사용자 정의 Metric 영속화 미지원 — mapper는 `verification.AllMetrics()` 카탈로그 키만 인식. 필요 시 `metric_category` 컬럼을 함께 저장하고 Metric 재구성 로직 추가.
   - 통합 테스트는 `-tags=integration` + Docker 필요. CI 파이프라인(Phase 10)에서 자동 실행되게 훅 걸어야 함.
+- **Phase 12 (probe context) — post-Phase 8**: API 응답시간 / 에러 모니터링. [phase-12-probe-context.md](./phase-12-probe-context.md) 스케치만 작성됨. 자체 indexer 1차, 번들 어댑터 2차.
 
 ### 다음 세션 재개 절차
 
-1. **Phase 7 착수** — `internal/infrastructure/queue/` (asynq) + scheduler + RateLimitBudget 구현체 + 4-stratum sampling. [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) 참조.
-2. 이후 Phase 8 (huma HTTP API) → Phase 9 (Next.js) → Phase 10 (observability + docker-compose 통합) → Phase 11 (Helm).
-3. (선택) 중간 어느 시점에 Phase 3G 작성. Phase 5/6 구조가 안정화된 지금이 실제 예시 작성에 좋은 타이밍.
+1. **Phase 7C.2 착수** — `internal/verification/address_sampling.go` 값객체 (known / top_n / random / recently_active) + black-box 테스트. 그 다음 `internal/application/ports.go`에 `AddressSampler` 포트 추가, 그 다음 `internal/infrastructure/sampling/` 구현체.
+2. 7C.3 — ExecuteRun AddressLatest fan-out + budget 통합.
+3. 이후 Phase 8 (huma HTTP API) → Phase 9 (Next.js) → Phase 10 (observability + docker-compose) → Phase 11 (Helm).
+4. Phase 12 (probe context)는 Phase 8 완료 시점에 본격 설계. 현재는 스케치만.
+5. (선택) 중간 어느 시점에 Phase 3G 작성.
 
 ### 확정 결정 (구현 완료된 것 포함)
 
@@ -142,11 +155,17 @@ examples/
 | 4 | `verification/` + `diff/` 도메인 (Metric 카테고리) | ✅ Done | 1, 2C | [phase-04-verification-diff-domain.md](./phase-04-verification-diff-domain.md) |
 | 5 | Application (use case) — 5A/5B/5C 완료 (ExecuteRun은 BlockImmutable MVP) | ✅ Done (MVP) | 2, 4 | [phase-05-application.md](./phase-05-application.md) |
 | 6 | Persistence (Postgres + gorm + golang-migrate + testcontainers) | ✅ Done | 4, 5 | [phase-06-persistence.md](./phase-06-persistence.md) |
-| 7 | Queue / Scheduler (Redis + asynq) — 4-stratum sampling, RateLimitBudget, ToleranceResolver 도입 | ⬜ Not started | 5 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7A | Queue — asynq dispatcher + worker + scheduler + health | ✅ Done | 5 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7B | Queue — RedisBudget (RateLimitBudget 구현체) | ✅ Done | 5, 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7C.1 | Application — ToleranceResolver + DiffRepository.Save meta | ✅ Done | 5, 6 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7C.2 | Application — 4-stratum 주소 샘플링 (AddressSamplingPlan + AddressSampler 포트) | ✅ Done | 5, 7C.1 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7C.3 | Application — ExecuteRun AddressLatest 경로 + Budget reserve/refund 통합 | ✅ Done (AddressLatest) | 5, 7B, 7C.2 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7D | Queue — ScheduledRun handler 실구현 + durable schedule store | ⬜ Not started | 5, 6, 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 8 | HTTP API (chi + huma) | ⬜ Not started | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
 | 11 | Kubernetes 배포 (Helm) | ⬜ Not started | 10 | [phase-11-kubernetes-deploy.md](./phase-11-kubernetes-deploy.md) |
+| 12 | Probe Context — API 응답시간 / 에러 모니터링 (별도 bounded context) | ⬜ Sketch only | 7, 8 | [phase-12-probe-context.md](./phase-12-probe-context.md) |
 
 ### 상태 아이콘
 
