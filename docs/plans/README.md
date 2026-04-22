@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7.6 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 7 종반 — queue/budget/tolerance/address-sampling/persistence/scheduled-run/durable-schedule-store/scheduled-plans/AddressAtBlock/ERC20Holdings/ERC20Balance(TokenSamplingPlan)/핸들러-메트릭 모두 배선됨. ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings + ERC20 Balance 5개 메트릭 클러스터 커버. TokenPlans는 아직 퍼시스턴스/scheduled-run 미전파(인메모리 SetTokenPlans만). 다음은 Phase 8 HTTP API.**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7.6 + 8.1 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 7 완료 + Phase 8 시작 — HTTP 서버 골격(chi+huma+미들웨어+health+openapi) 배선됨. ExecuteRun 5개 메트릭 클러스터 커버(BlockImmutable/AddressLatest/AddressAtBlock/ERC20 Holdings/ERC20 Balance). 다음은 Phase 8.2~8.5 리소스 라우트.**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -85,7 +85,8 @@ examples/
 | **Phase 7G** — ExecuteRun AddressAtBlock 경로: `extractAddressAtBlockField` (balance/nonce) + `runAddressAtBlockPass` + `compareAddressAtBlock` + `fetchAddressAtBlockAll` (Budget reserve/refund). 샘플링은 AddressLatest와 동일한 AddressSamplingPlan 집합 재사용, 카티션은 addresses × blocks. Discrepancy.Block = queried block, SaveDiffMeta.AnchorBlock = Run finalized anchor (두 값 분리). 아카이브 미지원 소스는 ErrUnsupported로 skip. | `bbfda00` |
 | **Phase 7H** — ExecuteRun ERC20 Holdings 경로: `extractERC20HoldingsField` (정렬된 "contract=balance;..." canonical form) + `runERC20HoldingsLatestPass` + `compareERC20HoldingsLatest` + `fetchERC20HoldingsAll` (Tier B Budget reserve/refund). 필터는 Category가 아닌 Capability 기준(`filterByCapability` 헬퍼 신규) — ERC20* 메트릭은 CatAddressLatest 카테고리를 plain balance/nonce와 공유하기 때문. | `7b40927` |
 | **Phase 7I** — ExecuteRun ERC20 Balance(per-token) 경로 + TokenSamplingPlan 도메인: `verification.TokenSamplingPlan` 인터페이스 + `KnownTokens` stratum + `Run.tokenPlans` 필드 + `Run.SetTokenPlans` (StatusPending 한정) + `TokenSampler` 포트 + `FakeTokenSampler` + `extractERC20BalanceField` + `runERC20BalanceLatestPass` (addresses × tokens cartesian) + `compareERC20BalanceLatest` + `fetchERC20BalanceAll` (Budget reserve/refund). 퍼시스턴스 / scheduled-run 전파는 follow-up. | `7143cc3` |
-| **Phase 7.6** — handler 메트릭 미들웨어: `queue.LoggingMiddleware(logger)` (task type / duration_ms / 성공-실패 slog 로깅). worker main에서 `mux.Use(queue.LoggingMiddleware(logger))` 로 체인 선두에 배선. asynqmon은 이미 `docker-compose.yml` `tools` profile에 존재. | (pending commit) |
+| **Phase 7.6** — handler 메트릭 미들웨어: `queue.LoggingMiddleware(logger)` (task type / duration_ms / 성공-실패 slog 로깅). worker main에서 `mux.Use(queue.LoggingMiddleware(logger))` 로 체인 선두에 배선. asynqmon은 이미 `docker-compose.yml` `tools` profile에 존재. | `76aaedf` |
+| **Phase 8.1** — HTTP API 서버 골격: chi 라우터 + huma v2 + humachi adapter, 미들웨어(requestid(X-Request-ID echo)/logging(slog request log)/recover(panic→500+stack)/cors(origin allow-list)), `routes/health.go` (`/healthz` 리브니스 + `/readyz` 리디니스), huma가 자동 서빙하는 `/openapi.json` + `/docs`, `cmd/csw-server/main.go` (DATABASE_URL/REDIS_URL 필수, Postgres PingContext + Redis TCP dial로 readiness 체크), `persistence.Ping(ctx, db)` 헬퍼 신설, `routes.HealthDeps`/`routes.HealthChecker` 포트. | (pending commit) |
 
 ### 진행 중
 
@@ -178,7 +179,12 @@ examples/
 | 7I | Application — ERC20 Balance(per-token) 경로 + TokenSamplingPlan + TokenSampler 포트 | ✅ Done (MVP) | 7H | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7I.2 | Persistence / scheduled-run — TokenPlans round-trip (runs.token_plans JSONB, SchedulePayload/ScheduleRecord 필드, pass-through) | ⬜ Not started | 7I | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7.6 | Observability — `queue.LoggingMiddleware` (slog duration/outcome) + asynqmon docker-compose profile | ✅ Done | 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
-| 8 | HTTP API (chi + huma) | ⬜ Not started | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.1 | HTTP API — server skeleton (chi + huma) + 미들웨어(requestid/logging/recover/cors) + /healthz /readyz + /openapi.json + cmd/csw-server | ✅ Done | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.2 | HTTP API — /runs 라우트 (POST/GET list/GET detail/POST cancel) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.3 | HTTP API — /diffs 라우트 (GET list/GET detail/POST replay) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + TokenPlans 라운드트립 | ⬜ Not started | 8.1, 7I.2 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.5 | HTTP API — /sources 라우트 (capability matrix + tier) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
 | 11 | Kubernetes 배포 (Helm) | ⬜ Not started | 10 | [phase-11-kubernetes-deploy.md](./phase-11-kubernetes-deploy.md) |

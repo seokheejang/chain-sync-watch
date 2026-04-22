@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -44,4 +45,19 @@ func Close(db *gorm.DB) error {
 		return err
 	}
 	return sqlDB.Close()
+}
+
+// Ping probes the underlying *sql.DB with a context-bound ping. Used
+// by the HTTP server's /readyz handler; short-circuits on the gorm
+// unwrap so a misconfigured gorm.DB surfaces as an immediate probe
+// failure rather than a panic.
+func Ping(ctx context.Context, db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("persistence: nil gorm.DB")
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("persistence: unwrap sql.DB: %w", err)
+	}
+	return sqlDB.PingContext(ctx)
 }
