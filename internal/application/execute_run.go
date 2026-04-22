@@ -37,8 +37,11 @@ import (
 //   - ERC20 holdings (Phase 7H): per-address FetchERC20Holdings with
 //     a canonical sorted "contract=balance" serialization, driven by
 //     the same AddressSamplingPlan set. Tier B metric — Budget
-//     reserve/refund is applied. ERC20 balance (per-token) needs a
-//     TokenSamplingPlan and is deferred.
+//     reserve/refund is applied.
+//   - ERC20 balance (Phase 7I): (address × token) cartesian over
+//     AddressSamplingPlan × TokenSamplingPlan sets. Tokens are
+//     resolved through the TokenSampler port (mirrors the Addresses
+//     path). Tier C metric — Budget applied per fetch.
 //   - Snapshot: not yet wired.
 //   - Tolerance is resolved per Metric via the ToleranceResolver
 //     port (nil falls back to ExactMatch across all categories).
@@ -79,6 +82,9 @@ type ExecuteRun struct {
 	// Addresses is optional; nil disables the AddressLatest loop
 	// even when the Run carries AddressSamplingPlans.
 	Addresses AddressSampler
+	// Tokens is optional; nil disables the ERC20 Balance (per-token)
+	// pass even when the Run carries TokenSamplingPlans.
+	Tokens TokenSampler
 	// Budget is optional; nil disables per-fetch budget accounting.
 	Budget RateLimitBudget
 }
@@ -158,7 +164,10 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 	if err := uc.runAddressAtBlockPass(ctx, run, blocks, anchor, sources); err != nil {
 		return err
 	}
-	return uc.runERC20HoldingsLatestPass(ctx, run, anchor, sources)
+	if err := uc.runERC20HoldingsLatestPass(ctx, run, anchor, sources); err != nil {
+		return err
+	}
+	return uc.runERC20BalanceLatestPass(ctx, run, anchor, sources)
 }
 
 // runAddressLatestPass drives the AddressLatest stratum loop. It is
@@ -250,6 +259,207 @@ func (uc ExecuteRun) runAddressAtBlockPass(
 		}
 	}
 	return nil
+}
+
+// runERC20BalanceLatestPass drives the ERC20 balance (per-token)
+// pass. Unlike runERC20HoldingsLatestPass, this path needs both the
+// AddressSampler (to enumerate which accounts to query) AND the
+// TokenSampler (to enumerate which token contracts to query); fan
+// out is the (address × token) cartesian. Disagreements come in
+// two flavors: a source may refuse to serve the token (returns
+// ErrUnsupported or nil Balance — extractor returns ok=false and
+// the slot is dropped), or two sources may report different
+// balances for the same pair (the comparison signal).
+//
+// The pass is a no-op when any precondition fails: no AddressPlans,
+// no TokenPlans, nil Addresses sampler, nil Tokens sampler, or no
+// CapERC20BalanceAtLatest metric in the Run.
+func (uc ExecuteRun) runERC20BalanceLatestPass(
+	ctx context.Context,
+	run *verification.Run,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+) error {
+	addressPlans := run.AddressPlans()
+	tokenPlans := run.TokenPlans()
+	if len(addressPlans) == 0 || len(tokenPlans) == 0 {
+		return nil
+	}
+	if uc.Addresses == nil || uc.Tokens == nil {
+		return nil
+	}
+	metrics := filterByCapability(run.Metrics(), source.CapERC20BalanceAtLatest)
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	addrs, err := uc.collectAddresses(ctx, run.ChainID(), addressPlans, anchor)
+	if err != nil {
+		return fmt.Errorf("execute run: erc20-balance address sampling: %w", err)
+	}
+	tokens, err := uc.collectTokens(ctx, run.ChainID(), tokenPlans, anchor)
+	if err != nil {
+		return fmt.Errorf("execute run: erc20-balance token sampling: %w", err)
+	}
+
+	for _, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, tok := range tokens {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := uc.compareERC20BalanceLatest(ctx, run, addr, tok, anchor, sources, metrics); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// collectTokens is the token counterpart to collectAddresses — same
+// dedup + byte-sort discipline so the (address × token) cartesian
+// is deterministic across runs with the same inputs.
+func (uc ExecuteRun) collectTokens(
+	ctx context.Context,
+	chainID chain.ChainID,
+	plans []verification.TokenSamplingPlan,
+	anchor chain.BlockNumber,
+) ([]chain.Address, error) {
+	seen := map[chain.Address]struct{}{}
+	var out []chain.Address
+	for _, p := range plans {
+		got, err := uc.Tokens.Sample(ctx, chainID, p, anchor)
+		if err != nil {
+			return nil, fmt.Errorf("plan %q: %w", p.Kind(), err)
+		}
+		for _, t := range got {
+			if _, dup := seen[t]; dup {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Bytes(), out[j].Bytes()) < 0
+	})
+	return out, nil
+}
+
+// compareERC20BalanceLatest fetches (addr, token) balance from every
+// Source in parallel. Discrepancy.Block is the Run's anchor —
+// "latest" observations reuse the AddressLatest convention. The
+// persisted Subject stays SubjectAddress keyed by `addr`; the token
+// contract is NOT encoded in the Discrepancy key, so callers that
+// want per-(address, token) DiffRecord lookup must read the
+// Metric.Key and the ValueSnapshot.Raw together. A future schema
+// extension can add a SubjectToken field if operators ask for it.
+func (uc ExecuteRun) compareERC20BalanceLatest(
+	ctx context.Context,
+	run *verification.Run,
+	addr chain.Address,
+	token chain.Address,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+	metrics []verification.Metric,
+) error {
+	results := uc.fetchERC20BalanceAll(ctx, sources, addr, token)
+	resolver := uc.resolver()
+
+	for _, m := range metrics {
+		snapshots := map[source.SourceID]diff.ValueSnapshot{}
+		for _, fr := range results {
+			if fr.err != nil {
+				continue
+			}
+			if !fr.source.Supports(m.Capability) {
+				continue
+			}
+			raw, ok := extractERC20BalanceField(m.Capability, fr.result)
+			if !ok {
+				continue
+			}
+			snapshots[fr.source.ID()] = diff.ValueSnapshot{
+				Raw:            raw,
+				FetchedAt:      fr.result.FetchedAt,
+				ReflectedBlock: fr.result.ReflectedBlock,
+			}
+		}
+		if len(snapshots) < 2 {
+			continue
+		}
+		outcome := applyTolerance(resolver.For(m), m, snapshots, anchor)
+		switch outcome {
+		case toleranceAgree, toleranceDiscard:
+			continue
+		case toleranceDisagree:
+			a := addr
+			d, err := diff.NewDiscrepancy(
+				run.ID(),
+				m,
+				anchor,
+				diff.Subject{Type: diff.SubjectAddress, Address: &a},
+				snapshots,
+				uc.Clock.Now(),
+			)
+			if err != nil {
+				continue
+			}
+			j := uc.Policy.Judge(d)
+			meta := SaveDiffMeta{
+				Tier:        m.Capability.Tier(),
+				AnchorBlock: anchor,
+			}
+			if _, err := uc.Diffs.Save(ctx, &d, j, meta); err != nil {
+				return fmt.Errorf("execute run: save diff (erc20-balance): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// erc20BalanceFetchResult pairs a Source with its FetchERC20Balance
+// outcome.
+type erc20BalanceFetchResult struct {
+	source source.Source
+	result source.ERC20BalanceResult
+	err    error
+}
+
+// fetchERC20BalanceAll fans out FetchERC20Balance across every
+// Source in parallel with the same Budget reserve/refund semantics
+// as fetchAddressLatestAll. ERC20 Balance is Tier C — both RPC
+// (via eth_call) and indexers serve it, but call volume is the
+// (address × token) product, so Budget gating is important.
+func (uc ExecuteRun) fetchERC20BalanceAll(
+	ctx context.Context,
+	sources []source.Source,
+	addr chain.Address,
+	token chain.Address,
+) []erc20BalanceFetchResult {
+	results := make([]erc20BalanceFetchResult, len(sources))
+	var wg sync.WaitGroup
+	wg.Add(len(sources))
+	for i, s := range sources {
+		go func() {
+			defer wg.Done()
+			if uc.Budget != nil {
+				if err := uc.Budget.Reserve(ctx, s.ID(), 1); err != nil {
+					results[i] = erc20BalanceFetchResult{source: s, err: err}
+					return
+				}
+			}
+			r, err := s.FetchERC20Balance(ctx, source.ERC20BalanceQuery{Address: addr, Token: token})
+			if err != nil && uc.Budget != nil {
+				_ = uc.Budget.Refund(ctx, s.ID(), 1)
+			}
+			results[i] = erc20BalanceFetchResult{source: s, result: r, err: err}
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 // runERC20HoldingsLatestPass drives the ERC-20 holdings pass. Same

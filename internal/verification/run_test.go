@@ -287,3 +287,48 @@ func newTestRun(t *testing.T) (*verification.Run, time.Time) {
 	require.NoError(t, err)
 	return r, now
 }
+
+func TestRun_SetTokenPlans_Success(t *testing.T) {
+	r, _ := newTestRun(t)
+	usdc := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{usdc}}))
+	plans := r.TokenPlans()
+	require.Len(t, plans, 1)
+	require.Equal(t, verification.KindKnownTokens, plans[0].Kind())
+}
+
+func TestRun_SetTokenPlans_ZeroPlansClears(t *testing.T) {
+	r, _ := newTestRun(t)
+	usdc := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{usdc}}))
+	require.Len(t, r.TokenPlans(), 1)
+
+	require.NoError(t, r.SetTokenPlans())
+	require.Nil(t, r.TokenPlans())
+}
+
+func TestRun_SetTokenPlans_NilPlanIsError(t *testing.T) {
+	r, _ := newTestRun(t)
+	err := r.SetTokenPlans(verification.TokenSamplingPlan(nil))
+	require.Error(t, err)
+}
+
+func TestRun_SetTokenPlans_RefusesAfterStart(t *testing.T) {
+	r, now := newTestRun(t)
+	require.NoError(t, r.Start(now))
+	err := r.SetTokenPlans(verification.KnownTokens{})
+	require.Error(t, err)
+}
+
+func TestRun_TokenPlans_ReturnsDefensiveCopy(t *testing.T) {
+	r, _ := newTestRun(t)
+	usdc := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{usdc}}))
+
+	plans := r.TokenPlans()
+	plans[0] = nil
+
+	again := r.TokenPlans()
+	require.NotNil(t, again[0])
+}

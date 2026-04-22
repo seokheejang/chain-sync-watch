@@ -102,6 +102,17 @@ func mkAddressAtBlock(t *testing.T, bal uint64, nonce uint64, block uint64) sour
 	}
 }
 
+func mkERC20Balance(t *testing.T, bal uint64, reflected uint64) source.ERC20BalanceResult {
+	t.Helper()
+	b := new(big.Int).SetUint64(bal)
+	rb := chain.BlockNumber(reflected)
+	return source.ERC20BalanceResult{
+		Balance:        b,
+		FetchedAt:      time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		ReflectedBlock: &rb,
+	}
+}
+
 func mkHolding(t *testing.T, contractHex string, bal uint64) source.TokenHolding {
 	t.Helper()
 	return source.TokenHolding{
@@ -882,6 +893,194 @@ func TestExecuteRun_ERC20Holdings_EmptyListOnBothAgrees(t *testing.T) {
 
 	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
 	require.Zero(t, f.diffs.Count(), "empty == empty is agreement")
+}
+
+func TestExecuteRun_ERC20Balance_DisagreementProducesDiff(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tok := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+
+	addrSampler := testsupport.NewFakeAddressSampler()
+	addrSampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	tokSampler := testsupport.NewFakeTokenSampler()
+	tokSampler.Results[verification.KindKnownTokens] = []chain.Address{tok}
+	f.useCase.Addresses = addrSampler
+	f.useCase.Tokens = tokSampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	rpc.SetERC20BalanceResponse(mkERC20Balance(t, 1000, 990), nil)
+	bs.SetERC20BalanceResponse(mkERC20Balance(t, 2000, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+	r, _ := f.runs.FindByID(context.Background(), "r1")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{tok}}))
+	require.NoError(t, f.runs.Save(context.Background(), r))
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, err := f.diffs.FindByRun(context.Background(), "r1")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	require.Equal(t, verification.MetricERC20BalanceLatest.Key, d.Metric.Key)
+	require.Equal(t, diff.SubjectAddress, d.Subject.Type)
+	require.NotNil(t, d.Subject.Address)
+	require.Equal(t, addr, *d.Subject.Address)
+	require.Equal(t, "1000", d.Values["rpc"].Raw)
+	require.Equal(t, "2000", d.Values["blockscout"].Raw)
+
+	require.Len(t, tokSampler.Calls, 1, "token sampler should be invoked once for the single plan")
+	require.Equal(t, verification.KindKnownTokens, tokSampler.Calls[0].Kind)
+	require.Equal(t, chain.BlockNumber(990), tokSampler.Calls[0].At)
+}
+
+func TestExecuteRun_ERC20Balance_CartesianFanOut(t *testing.T) {
+	f := newExecFixture()
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+	tokA := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+	tokB := chain.MustAddress("0x0000000000000000000000000000000000000bbb")
+
+	addrSampler := testsupport.NewFakeAddressSampler()
+	addrSampler.Results[verification.KindKnownAddresses] = []chain.Address{a, b}
+	tokSampler := testsupport.NewFakeTokenSampler()
+	tokSampler.Results[verification.KindKnownTokens] = []chain.Address{tokA, tokB}
+	f.useCase.Addresses = addrSampler
+	f.useCase.Tokens = tokSampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+
+	// Disagree only at (a, tokB); 3 of 4 cells agree.
+	handler := func(agreeBal, divergeBal uint64) func(context.Context, source.ERC20BalanceQuery) (source.ERC20BalanceResult, error) {
+		return func(_ context.Context, q source.ERC20BalanceQuery) (source.ERC20BalanceResult, error) {
+			if q.Address == a && q.Token == tokB {
+				return mkERC20Balance(t, divergeBal, 990), nil
+			}
+			return mkERC20Balance(t, agreeBal, 990), nil
+		}
+	}
+	rpc.SetERC20BalanceHandler(handler(100, 100))
+	bs.SetERC20BalanceHandler(handler(100, 999))
+
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+	)
+	r, _ := f.runs.FindByID(context.Background(), "r1")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{tokA, tokB}}))
+	require.NoError(t, f.runs.Save(context.Background(), r))
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count(), "exactly one cell (a, tokB) disagrees")
+
+	records, _ := f.diffs.FindByRun(context.Background(), "r1")
+	require.Len(t, records, 1)
+	require.NotNil(t, records[0].Discrepancy.Subject.Address)
+	require.Equal(t, a, *records[0].Discrepancy.Subject.Address)
+}
+
+func TestExecuteRun_ERC20Balance_NoTokenPlansSkipsPass(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	addrSampler := testsupport.NewFakeAddressSampler()
+	addrSampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	tokSampler := testsupport.NewFakeTokenSampler()
+	f.useCase.Addresses = addrSampler
+	f.useCase.Tokens = tokSampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	rpc.SetERC20BalanceResponse(mkERC20Balance(t, 1000, 990), nil)
+	bs.SetERC20BalanceResponse(mkERC20Balance(t, 2000, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	// AddressPlans present but no TokenPlans set on the Run — pass must no-op.
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "without TokenPlans the ERC20 Balance pass is a no-op")
+	require.Empty(t, tokSampler.Calls, "token sampler must not be invoked")
+}
+
+func TestExecuteRun_ERC20Balance_NilTokensPortSkipsPass(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tok := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+
+	addrSampler := testsupport.NewFakeAddressSampler()
+	addrSampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = addrSampler
+	// Tokens port intentionally nil.
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	rpc.SetERC20BalanceResponse(mkERC20Balance(t, 1000, 990), nil)
+	bs.SetERC20BalanceResponse(mkERC20Balance(t, 2000, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+	r, _ := f.runs.FindByID(context.Background(), "r1")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{tok}}))
+	require.NoError(t, f.runs.Save(context.Background(), r))
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "nil Tokens port must no-op even when the Run has TokenPlans")
+}
+
+func TestExecuteRun_ERC20Balance_TokenSamplerErrorFailsRun(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tok := chain.MustAddress("0x0000000000000000000000000000000000000aaa")
+
+	addrSampler := testsupport.NewFakeAddressSampler()
+	addrSampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	tokSampler := testsupport.NewFakeTokenSampler()
+	tokSampler.Err = errors.New("token sampler exploded")
+	f.useCase.Addresses = addrSampler
+	f.useCase.Tokens = tokSampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20BalanceAtLatest))
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+	r, _ := f.runs.FindByID(context.Background(), "r1")
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{tok}}))
+	require.NoError(t, f.runs.Save(context.Background(), r))
+
+	err := f.useCase.Execute(context.Background(), "r1")
+	require.Error(t, err)
+	r2, _ := f.runs.FindByID(context.Background(), "r1")
+	require.Equal(t, verification.StatusFailed, r2.Status())
 }
 
 func TestExecuteRun_ERC20Holdings_BudgetExhaustedSkipsSource(t *testing.T) {

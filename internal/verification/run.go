@@ -70,13 +70,22 @@ func (s Status) IsTerminal() bool {
 //
 // addressPlans is optional: a zero-length slice is valid and means
 // "no address-stratum coverage". ExecuteRun uses it exclusively for
-// AddressLatest / AddressAtBlock metrics; BlockImmutable passes
-// require only the block-level SamplingStrategy.
+// AddressLatest / AddressAtBlock / ERC20 Holdings metrics;
+// BlockImmutable passes require only the block-level
+// SamplingStrategy.
+//
+// tokenPlans is optional and complements addressPlans for the ERC20
+// Balance (per-token) pass. When both are non-empty, ExecuteRun
+// runs FetchERC20Balance over the (address × token) cartesian.
+// Kept as a separate field rather than a union with addressPlans
+// because addresses and tokens are semantically distinct even
+// though both are chain.Address under the hood.
 type Run struct {
 	id           RunID
 	chainID      chain.ChainID
 	strategy     SamplingStrategy
 	addressPlans []AddressSamplingPlan
+	tokenPlans   []TokenSamplingPlan
 	metrics      []Metric
 	trigger      Trigger
 	status       Status
@@ -189,6 +198,48 @@ func (r *Run) AddressPlans() []AddressSamplingPlan {
 	out := make([]AddressSamplingPlan, len(r.addressPlans))
 	copy(out, r.addressPlans)
 	return out
+}
+
+// TokenPlans returns a defensive copy of the configured token
+// sampling plans. A zero-length result means the Run does not cover
+// ERC20 Balance (per-token) metrics.
+func (r *Run) TokenPlans() []TokenSamplingPlan {
+	if len(r.tokenPlans) == 0 {
+		return nil
+	}
+	out := make([]TokenSamplingPlan, len(r.tokenPlans))
+	copy(out, r.tokenPlans)
+	return out
+}
+
+// SetTokenPlans attaches the token sampling plans to a Run that is
+// still in the Pending state. Separate from NewRun because the
+// domain API keeps the NewRun signature stable — both addressPlans
+// and tokenPlans cannot share one variadic — and because the rest
+// of the infrastructure (persistence, schedule payload) hasn't
+// been round-tripped for tokens yet, so the safety valve of a
+// dedicated mutator keeps the feature gated until that work lands.
+//
+// Returns an error if called after the Run has left Pending (the
+// aggregate is immutable past that point) or if any plan is nil.
+// Calling with zero plans is valid and clears any previously-set
+// slice — useful in test setups.
+func (r *Run) SetTokenPlans(plans ...TokenSamplingPlan) error {
+	if r.status != StatusPending {
+		return fmt.Errorf("run: cannot set token plans from status %q", r.status)
+	}
+	for i, p := range plans {
+		if p == nil {
+			return fmt.Errorf("run: token plan %d is nil", i)
+		}
+	}
+	if len(plans) == 0 {
+		r.tokenPlans = nil
+		return nil
+	}
+	r.tokenPlans = make([]TokenSamplingPlan, len(plans))
+	copy(r.tokenPlans, plans)
+	return nil
 }
 
 // StartedAt returns a pointer to the started-at timestamp, or nil

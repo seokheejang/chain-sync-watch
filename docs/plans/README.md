@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7H 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 7 종반 — queue/budget/tolerance/address-sampling/persistence/scheduled-run/durable-schedule-store/scheduled-plans/AddressAtBlock/ERC20Holdings 모두 배선됨. cron → Run 생성 경로에서 AddressLatest + AddressAtBlock + ERC20 Holdings 커버리지까지 end-to-end. ERC20 Balance(per-token)는 TokenSamplingPlan 설계 대기 중. 다음은 TokenSamplingPlan 설계 → asynqmon/observability → Phase 8 HTTP API 순.**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 7 종반 — queue/budget/tolerance/address-sampling/persistence/scheduled-run/durable-schedule-store/scheduled-plans/AddressAtBlock/ERC20Holdings/ERC20Balance(TokenSamplingPlan) 모두 배선됨. ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings + ERC20 Balance 5개 메트릭 클러스터 커버. TokenPlans는 아직 퍼시스턴스/scheduled-run 미전파(인메모리 SetTokenPlans만). 다음은 asynqmon/observability → Phase 8 HTTP API 순.**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -83,13 +83,15 @@ examples/
 | **Phase 7C.4** — persistence `address_plans` JSONB 컬럼 + mapper round-trip + integration 테스트 보강 | `5f21b5e` |
 | **Phase 7D+7E+7F** — scheduled-run end-to-end 파이프라인: ① `HandleScheduledRun` 실구현 (payload→Run→save→enqueue) + persistence 헬퍼 export + Dispatcher 와이어포맷 통일; ② durable schedule store (마이그레이션 003 `schedules` 테이블, `ScheduleRecord`/`ScheduleRepository` 포트, gorm 구현체, Dispatcher의 in-memory store→DB-backed `dbConfigProvider` refactor, worker main `Scheduler.Start()` 배선); ③ scheduled 경로에 AddressSamplingPlan 전파 (마이그레이션 004 `schedules.address_plans` JSONB, `SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput`/`ScheduledRunPayload` plans 필드, 핸들러와 `ScheduleRun` 유스케이스 pass-through) | `51af054` |
 | **Phase 7G** — ExecuteRun AddressAtBlock 경로: `extractAddressAtBlockField` (balance/nonce) + `runAddressAtBlockPass` + `compareAddressAtBlock` + `fetchAddressAtBlockAll` (Budget reserve/refund). 샘플링은 AddressLatest와 동일한 AddressSamplingPlan 집합 재사용, 카티션은 addresses × blocks. Discrepancy.Block = queried block, SaveDiffMeta.AnchorBlock = Run finalized anchor (두 값 분리). 아카이브 미지원 소스는 ErrUnsupported로 skip. | `bbfda00` |
-| **Phase 7H** — ExecuteRun ERC20 Holdings 경로: `extractERC20HoldingsField` (정렬된 "contract=balance;..." canonical form) + `runERC20HoldingsLatestPass` + `compareERC20HoldingsLatest` + `fetchERC20HoldingsAll` (Tier B Budget reserve/refund). 필터는 Category가 아닌 Capability 기준(`filterByCapability` 헬퍼 신규) — ERC20* 메트릭은 CatAddressLatest 카테고리를 plain balance/nonce와 공유하기 때문. ERC20 Balance(per-token)는 TokenSamplingPlan 필요 → defer. | (pending commit) |
+| **Phase 7H** — ExecuteRun ERC20 Holdings 경로: `extractERC20HoldingsField` (정렬된 "contract=balance;..." canonical form) + `runERC20HoldingsLatestPass` + `compareERC20HoldingsLatest` + `fetchERC20HoldingsAll` (Tier B Budget reserve/refund). 필터는 Category가 아닌 Capability 기준(`filterByCapability` 헬퍼 신규) — ERC20* 메트릭은 CatAddressLatest 카테고리를 plain balance/nonce와 공유하기 때문. | `7b40927` |
+| **Phase 7I** — ExecuteRun ERC20 Balance(per-token) 경로 + TokenSamplingPlan 도메인: `verification.TokenSamplingPlan` 인터페이스 + `KnownTokens` stratum + `Run.tokenPlans` 필드 + `Run.SetTokenPlans` (StatusPending 한정) + `TokenSampler` 포트 + `FakeTokenSampler` + `extractERC20BalanceField` + `runERC20BalanceLatestPass` (addresses × tokens cartesian) + `compareERC20BalanceLatest` + `fetchERC20BalanceAll` (Budget reserve/refund). 퍼시스턴스 / scheduled-run 전파는 follow-up. | (pending commit) |
 
 ### 진행 중
 
-- (follow-up) ERC-20 Balance(per-token) / Snapshot 경로. 현재 ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings 커버.
-- (follow-up) **TokenSamplingPlan 설계** — ERC20 Balance는 (address, token) 쌍이 필요. AddressSamplingPlan과 유사한 4-stratum 플랜(known/top-holders/random/from-holdings) 정의 후 Run에 추가 필드로 넣어 runERC20BalancePass 구현. 또는 Holdings 결과의 union으로 derived token list를 뽑는 2-phase 접근도 검토 가능.
-- (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest / AddressAtBlock / ERC20 Holdings fetch에 적용됨, Block fetch만 남음.
+- (follow-up) **TokenPlans 퍼시스턴스 라운드트립** — 현재 `Run.SetTokenPlans`는 in-memory만 유지. persistence mapper / `runs.token_plans` JSONB 컬럼 (migration 005) / `SchedulePayload.TokenPlans` / `ScheduleRecord.TokenPlans` / scheduled-run payload / `ScheduleRun` 유스케이스 pass-through 모두 미구현. Phase 8 HTTP API에서 schedule 생성 경로 붙일 때 같이 처리.
+- (follow-up) **추가 TokenSamplingPlan 스트래텀** — TopNTokens / RandomTokens / FromHoldings (Holdings 결과의 union). 현재 KnownTokens만 구현됨.
+- (follow-up) Snapshot 경로. 현재 ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings + ERC20 Balance 커버.
+- (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest / AddressAtBlock / ERC20 Holdings / ERC20 Balance fetch에 적용됨, Block fetch만 남음.
 - (follow-up) asynqmon docker-compose override + 핸들러 메트릭 (Phase 7.6 잔여).
 
 ### 남은 잔여 & 미구현
@@ -99,7 +101,7 @@ examples/
 - **ExecuteRun 커버리지 확장** (Phase 7G+):
   - ✅ **AddressAtBlock** 경로 (Phase 7G 완료) — `FetchAddressAtBlock` + `extractAddressAtBlockField` + `runAddressAtBlockPass` 신규. Subject는 Address, Discrepancy.Block은 queried block (anchor와 분리).
   - ✅ **ERC-20 Holdings** (Phase 7H 완료) — `FetchERC20Holdings` + 정렬된 canonical extractor + runERC20HoldingsLatestPass. `filterByCapability` 신설로 Category-공유 문제 해결.
-  - **ERC-20 Balance(per-token)** — TokenSamplingPlan 설계 후 착수. AddressSamplingPlan과 평행 구조 예상.
+  - ✅ **ERC-20 Balance(per-token)** (Phase 7I 완료) — TokenSamplingPlan 도메인(KnownTokens) + TokenSampler 포트 + FakeTokenSampler + Run.SetTokenPlans + (address × token) cartesian fan-out. 퍼시스턴스 round-trip은 follow-up.
   - **Snapshot** (`CapTotalAddressCount` 등) — Observational 기본이라 현재 `DefaultPolicy`가 Info로 suppress. 관찰용 뷰 필요 시 Phase 8/9 API/UI 시점에 복원.
   - **Block fetch 경로에도 Budget 통합** — 현재 Budget은 AddressLatest/AddressAtBlock/ERC20 Holdings fetch에 적용됨, Block fetch만 남음. 사용자 RPC 엔드포인트도 quota 있을 수 있어 확장 여지.
 - **asynqmon + 핸들러 메트릭** (Phase 7.6) — docker-compose.override.yml에 asynqmon 추가 + slogMiddleware로 핸들러 처리시간/성공-실패 카운트 로깅. 선택: Prometheus exporter.
@@ -111,12 +113,11 @@ examples/
 
 ### 다음 세션 재개 절차
 
-1. **TokenSamplingPlan 설계** — ERC20 Balance(per-token) 경로의 전제. `verification.TokenSamplingPlan` 인터페이스 + 4-stratum(known / top-holders / random / from-holdings). Run에 `tokenPlans` 필드 추가 (addressPlans와 평행). 샘플러 포트는 AddressSampler와 분리하거나 generic 하나로 통합 가능.
-2. (또는) **asynqmon + 핸들러 메트릭** (Phase 7.6) 먼저 — docker-compose override + slog 기반 처리시간/카운트 미들웨어.
-3. 이후 **Phase 8 (huma HTTP API)** → `/api/runs`, `/api/diffs`, `/api/schedules` 리소스 3개. ScheduleRun 유스케이스 이미 준비됨 (plans 포함).
-4. Phase 9 (Next.js) → Phase 10 (observability + docker-compose 통합) → Phase 11 (Helm).
-5. Phase 12 (probe context)는 Phase 8 완료 시점에 본격 설계. 현재는 스케치만.
-6. (선택) 중간 어느 시점에 Phase 3G 작성.
+1. **Phase 7.6 — asynqmon + 핸들러 메트릭** — docker-compose.override.yml에 asynqmon 추가 + slog 기반 처리시간/성공-실패 카운트 미들웨어.
+2. **Phase 8 (huma HTTP API)** → `/api/runs`, `/api/diffs`, `/api/schedules` 리소스 3개. ScheduleRun 유스케이스 이미 준비됨 (address plans 포함). Schedule 생성 API 붙일 때 TokenPlans 퍼시스턴스 라운드트립(Phase 7I.2)도 같이 배선하는 것을 권장.
+3. Phase 9 (Next.js) → Phase 10 (observability + docker-compose 통합) → Phase 11 (Helm).
+4. Phase 12 (probe context)는 Phase 8 완료 시점에 본격 설계. 현재는 스케치만.
+5. (선택) 중간 어느 시점에 Phase 3G 작성.
 
 ### 확정 결정 (구현 완료된 것 포함)
 
@@ -174,7 +175,8 @@ examples/
 | 7F | Scheduled payload + ScheduleRecord에 AddressSamplingPlan 포함 (schedules.address_plans 컬럼) | ✅ Done | 7C.3, 7E | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7G | Application — ExecuteRun AddressAtBlock 경로 (extractor + runAddressAtBlockPass + fetchAll with Budget) | ✅ Done | 7C.3 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7H | Application — ExecuteRun ERC20 Holdings 경로 (canonical extractor + runERC20HoldingsLatestPass + filterByCapability) | ✅ Done | 7C.3 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
-| 7I | Application — ERC20 Balance(per-token) 경로 + TokenSamplingPlan | ⬜ Not started | 7H | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7I | Application — ERC20 Balance(per-token) 경로 + TokenSamplingPlan + TokenSampler 포트 | ✅ Done (MVP) | 7H | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7I.2 | Persistence / scheduled-run — TokenPlans round-trip (runs.token_plans JSONB, SchedulePayload/ScheduleRecord 필드, pass-through) | ⬜ Not started | 7I | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 8 | HTTP API (chi + huma) | ⬜ Not started | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |

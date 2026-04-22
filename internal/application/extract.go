@@ -133,6 +133,25 @@ func extractAddressAtBlockField(capb source.Capability, r source.AddressAtBlockR
 	return "", false
 }
 
+// extractERC20BalanceField renders an ERC20BalanceResult into its
+// canonical string form. Only CapERC20BalanceAtLatest is handled;
+// the caller has already filtered metrics by Capability so a
+// mismatch here signals a programming error, not a data condition.
+//
+// Balance is a big.Int decimal — same convention as plain account
+// balance. Decimals and Symbol are metadata, not comparison
+// targets; operators who want to cross-check token metadata wire up
+// a dedicated metric rather than embedding it in the balance diff.
+func extractERC20BalanceField(capb source.Capability, r source.ERC20BalanceResult) (string, bool) {
+	if capb != source.CapERC20BalanceAtLatest {
+		return "", false
+	}
+	if r.Balance == nil {
+		return "", false
+	}
+	return r.Balance.String(), true
+}
+
 // extractERC20HoldingsField renders ERC20HoldingsResult into a
 // canonical, order-independent string so ExactMatch tolerance can
 // tell two sources apart.

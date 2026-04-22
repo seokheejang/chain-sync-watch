@@ -226,3 +226,22 @@ type AddressSampler interface {
 		at chain.BlockNumber,
 	) ([]chain.Address, error)
 }
+
+// TokenSampler resolves a verification.TokenSamplingPlan into a
+// concrete ERC-20 contract list at a specific anchor block. The
+// port parallels AddressSampler because the same externality
+// argument applies — only the Known stratum is domain-computable,
+// others need indexer queries (top-N by holder count) or derivation
+// from concurrent Holdings fetches.
+//
+// Current implementations ship only Known support; the port is in
+// place so the additional stratums can land without another
+// application-layer refactor.
+type TokenSampler interface {
+	Sample(
+		ctx context.Context,
+		chainID chain.ChainID,
+		plan verification.TokenSamplingPlan,
+		at chain.BlockNumber,
+	) ([]chain.Address, error)
+}
