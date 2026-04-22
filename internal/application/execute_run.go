@@ -19,7 +19,7 @@ import (
 // metric values under the Tolerance a resolver hands back, and
 // persists DiffRecords for every disagreement.
 //
-// Scope in Phase 7C.3:
+// Scope in Phase 7G:
 //
 //   - BlockImmutable metrics: fetched once per block, compared
 //     across every Source that supports the Capability.
@@ -29,7 +29,12 @@ import (
 //     merged address set, and fans out FetchAddressLatest across
 //     the Sources. ValueSnapshot.ReflectedBlock is populated so
 //     AnchorWindowed tolerance can discard stale samples.
-//   - AddressAtBlock / ERC20 / Snapshot: not yet wired.
+//   - AddressAtBlock metrics (Phase 7G): archive-backed historical
+//     state. Same AddressSamplingPlan set as AddressLatest, but the
+//     fan-out is (address × block) cartesian over the Run's block
+//     sampling strategy. Sources that don't support archive reads
+//     return ErrUnsupported and are skipped.
+//   - ERC20 / Snapshot: not yet wired.
 //   - Tolerance is resolved per Metric via the ToleranceResolver
 //     port (nil falls back to ExactMatch across all categories).
 //     Pair-wise Tolerance outcomes collapse to whole-sample
@@ -142,7 +147,10 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 		}
 	}
 
-	return uc.runAddressLatestPass(ctx, run, anchor, sources)
+	if err := uc.runAddressLatestPass(ctx, run, anchor, sources); err != nil {
+		return err
+	}
+	return uc.runAddressAtBlockPass(ctx, run, blocks, anchor, sources)
 }
 
 // runAddressLatestPass drives the AddressLatest stratum loop. It is
@@ -180,6 +188,57 @@ func (uc ExecuteRun) runAddressLatestPass(
 		}
 		if err := uc.compareAddressLatest(ctx, run, addr, anchor, sources, addressMetrics); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// runAddressAtBlockPass drives the AddressAtBlock stratum loop. The
+// preconditions mirror runAddressLatestPass, plus the Run's
+// SamplingStrategy must yield at least one block — AddressAtBlock is
+// anchored to specific historical heights, so an empty block list
+// means "nothing to verify at depth" and we skip silently.
+//
+// Iteration order: addresses outer, blocks inner. That keeps a
+// single address's archive reads contiguous on each source, which
+// matters for adapters that cache archive state per-address.
+// Sources that don't support archive reads surface ErrUnsupported
+// from FetchAddressAtBlock; compareAddressAtBlock skips those
+// fetches like any other per-call error.
+func (uc ExecuteRun) runAddressAtBlockPass(
+	ctx context.Context,
+	run *verification.Run,
+	blocks []chain.BlockNumber,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+) error {
+	plans := run.AddressPlans()
+	if len(plans) == 0 || uc.Addresses == nil {
+		return nil
+	}
+	addressMetrics := filterByCategory(run.Metrics(), verification.CatAddressAtBlock)
+	if len(addressMetrics) == 0 {
+		return nil
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	addrs, err := uc.collectAddresses(ctx, run.ChainID(), plans, anchor)
+	if err != nil {
+		return fmt.Errorf("execute run: address-at-block sampling: %w", err)
+	}
+	for _, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, block := range blocks {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := uc.compareAddressAtBlock(ctx, run, addr, block, anchor, sources, addressMetrics); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -348,6 +407,120 @@ func (uc ExecuteRun) compareAddressLatest(
 		}
 	}
 	return nil
+}
+
+// compareAddressAtBlock fetches (addr, block) from every Source in
+// parallel and emits a DiffRecord for each AddressAtBlock metric
+// where the sources disagree. The persisted Discrepancy.Block is
+// `block` (the historical height under comparison), while
+// SaveDiffMeta.AnchorBlock stays the Run's verification anchor —
+// they are two different properties (one is the query key, the
+// other is the Run's anchor-point for replay).
+func (uc ExecuteRun) compareAddressAtBlock(
+	ctx context.Context,
+	run *verification.Run,
+	addr chain.Address,
+	block chain.BlockNumber,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+	metrics []verification.Metric,
+) error {
+	results := uc.fetchAddressAtBlockAll(ctx, sources, addr, block)
+	resolver := uc.resolver()
+
+	for _, m := range metrics {
+		snapshots := map[source.SourceID]diff.ValueSnapshot{}
+		for _, fr := range results {
+			if fr.err != nil {
+				continue
+			}
+			if !fr.source.Supports(m.Capability) {
+				continue
+			}
+			raw, ok := extractAddressAtBlockField(m.Capability, fr.result)
+			if !ok {
+				continue
+			}
+			snapshots[fr.source.ID()] = diff.ValueSnapshot{
+				Raw:            raw,
+				FetchedAt:      fr.result.FetchedAt,
+				ReflectedBlock: fr.result.ReflectedBlock,
+			}
+		}
+		if len(snapshots) < 2 {
+			continue
+		}
+		outcome := applyTolerance(resolver.For(m), m, snapshots, anchor)
+		switch outcome {
+		case toleranceAgree, toleranceDiscard:
+			continue
+		case toleranceDisagree:
+			a := addr
+			d, err := diff.NewDiscrepancy(
+				run.ID(),
+				m,
+				block,
+				diff.Subject{Type: diff.SubjectAddress, Address: &a},
+				snapshots,
+				uc.Clock.Now(),
+			)
+			if err != nil {
+				continue
+			}
+			j := uc.Policy.Judge(d)
+			meta := SaveDiffMeta{
+				Tier:        m.Capability.Tier(),
+				AnchorBlock: anchor,
+			}
+			if _, err := uc.Diffs.Save(ctx, &d, j, meta); err != nil {
+				return fmt.Errorf("execute run: save diff (address-at-block): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// addrAtBlockFetchResult pairs a Source with its FetchAddressAtBlock
+// outcome.
+type addrAtBlockFetchResult struct {
+	source source.Source
+	result source.AddressAtBlockResult
+	err    error
+}
+
+// fetchAddressAtBlockAll fans out FetchAddressAtBlock across every
+// Source in parallel with the same Budget reserve/refund semantics
+// as fetchAddressLatestAll. Sources that don't serve archive reads
+// surface ErrUnsupported here and the error short-circuits the
+// per-source slot; the caller treats unsupported sources and
+// transport errors identically (skip the snapshot).
+func (uc ExecuteRun) fetchAddressAtBlockAll(
+	ctx context.Context,
+	sources []source.Source,
+	addr chain.Address,
+	block chain.BlockNumber,
+) []addrAtBlockFetchResult {
+	results := make([]addrAtBlockFetchResult, len(sources))
+	var wg sync.WaitGroup
+	wg.Add(len(sources))
+	for i, s := range sources {
+		go func() {
+			defer wg.Done()
+			if uc.Budget != nil {
+				if err := uc.Budget.Reserve(ctx, s.ID(), 1); err != nil {
+					results[i] = addrAtBlockFetchResult{source: s, err: err}
+					return
+				}
+			}
+			r, err := s.FetchAddressAtBlock(ctx, source.AddressAtBlockQuery{Address: addr, Block: block})
+			if err != nil && uc.Budget != nil {
+				_ = uc.Budget.Refund(ctx, s.ID(), 1)
+			}
+			results[i] = addrAtBlockFetchResult{source: s, result: r, err: err}
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 // addrFetchResult pairs a Source with its FetchAddressLatest outcome.

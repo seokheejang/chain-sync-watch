@@ -107,3 +107,25 @@ func extractAddressLatestField(capb source.Capability, r source.AddressLatestRes
 	}
 	return "", false
 }
+
+// extractAddressAtBlockField renders the AddressAtBlockResult field
+// corresponding to a Capability. The same canonical forms as
+// extractAddressLatestField apply; only the result type differs
+// (archive reads populate Block as well, but Block is not a
+// comparison target — it is the query key, echoed back for
+// caller sanity checks).
+func extractAddressAtBlockField(capb source.Capability, r source.AddressAtBlockResult) (string, bool) {
+	switch capb {
+	case source.CapBalanceAtBlock:
+		if r.Balance == nil {
+			return "", false
+		}
+		return r.Balance.String(), true
+	case source.CapNonceAtBlock:
+		if r.Nonce == nil {
+			return "", false
+		}
+		return strconv.FormatUint(*r.Nonce, 10), true
+	}
+	return "", false
+}

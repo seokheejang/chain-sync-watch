@@ -88,6 +88,20 @@ func mkAddressLatest(t *testing.T, bal uint64, nonce uint64, reflected uint64) s
 	}
 }
 
+func mkAddressAtBlock(t *testing.T, bal uint64, nonce uint64, block uint64) source.AddressAtBlockResult {
+	t.Helper()
+	b := new(big.Int).SetUint64(bal)
+	n := nonce
+	bn := chain.BlockNumber(block)
+	return source.AddressAtBlockResult{
+		Balance:        b,
+		Nonce:          &n,
+		Block:          bn,
+		FetchedAt:      time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		ReflectedBlock: &bn,
+	}
+}
+
 func mkBlockResult(t *testing.T, hashHex, parentHex string, ts int64, txCount uint64) source.BlockResult {
 	t.Helper()
 	h, err := chain.NewHash32(hashHex)
@@ -607,4 +621,137 @@ func TestExecuteRun_AddressLatest_SamplerErrorFailsRun(t *testing.T) {
 
 	r, _ := f.runs.FindByID(context.Background(), "r1")
 	require.Equal(t, verification.StatusFailed, r.Status())
+}
+
+func TestExecuteRun_AddressAtBlock_DisagreementProducesDiff(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	rpc.SetAddressAtBlockResponse(mkAddressAtBlock(t, 1000, 5, 500), nil)
+	bs.SetAddressAtBlockResponse(mkAddressAtBlock(t, 2000, 5, 500), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceAtBlock},
+		[]chain.BlockNumber{500},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, err := f.diffs.FindByRun(context.Background(), "r1")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	require.Equal(t, verification.MetricBalanceAtBlock.Key, d.Metric.Key)
+	require.Equal(t, diff.SubjectAddress, d.Subject.Type)
+	require.NotNil(t, d.Subject.Address)
+	require.Equal(t, addr, *d.Subject.Address)
+	require.Equal(t, chain.BlockNumber(500), d.Block, "Discrepancy.Block should be the queried historical block")
+	require.Equal(t, chain.BlockNumber(990), records[0].AnchorBlock, "AnchorBlock meta stays the Run's finalized anchor")
+	require.Equal(t, "1000", d.Values["rpc"].Raw)
+	require.Equal(t, "2000", d.Values["blockscout"].Raw)
+}
+
+func TestExecuteRun_AddressAtBlock_NoBlocksSkipsPass(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	rpc.SetAddressAtBlockResponse(mkAddressAtBlock(t, 1000, 5, 500), nil)
+	bs.SetAddressAtBlockResponse(mkAddressAtBlock(t, 2000, 5, 500), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceAtBlock},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "no blocks means no AddressAtBlock comparisons")
+}
+
+func TestExecuteRun_AddressAtBlock_UnsupportedSourceIsSkipped(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	rpc.SetAddressAtBlockResponse(mkAddressAtBlock(t, 1000, 5, 500), nil)
+	// blockscout lacks the archive capability.
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs.SetAddressAtBlockResponse(source.AddressAtBlockResult{}, source.ErrUnsupported)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceAtBlock},
+		[]chain.BlockNumber{500},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "only one source supports archive — nothing to compare")
+}
+
+func TestExecuteRun_AddressAtBlock_CartesianOverBlocksAndAddresses(t *testing.T) {
+	f := newExecFixture()
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{a, b}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtBlock))
+
+	// Disagree only at (addr=b, block=501); all other 3 cells agree.
+	handler := func(agreeBal, divergeBal uint64) func(context.Context, source.AddressAtBlockQuery) (source.AddressAtBlockResult, error) {
+		return func(_ context.Context, q source.AddressAtBlockQuery) (source.AddressAtBlockResult, error) {
+			if q.Address == b && q.Block == 501 {
+				return mkAddressAtBlock(t, divergeBal, 5, uint64(q.Block)), nil
+			}
+			return mkAddressAtBlock(t, agreeBal, 5, uint64(q.Block)), nil
+		}
+	}
+	rpc.SetAddressAtBlockHandler(handler(100, 100))
+	bs.SetAddressAtBlockHandler(handler(100, 999))
+
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceAtBlock},
+		[]chain.BlockNumber{500, 501},
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count(), "exactly one cell (b, 501) disagrees")
+
+	records, _ := f.diffs.FindByRun(context.Background(), "r1")
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	require.Equal(t, chain.BlockNumber(501), d.Block)
+	require.NotNil(t, d.Subject.Address)
+	require.Equal(t, b, *d.Subject.Address)
 }
