@@ -36,10 +36,11 @@ type Config struct {
 
 // Deps bundles the route-registration dependencies. Callers populate
 // only the fields they want to expose — leaving a set nil simply
-// omits that resource's routes. Phase 8.1 ships the Health deps;
-// Runs / Diffs / Schedules / Sources land in 8.2–8.5.
+// omits that resource's routes. Phase 8.1 shipped Health; Phase 8.2
+// adds Runs. Diffs / Schedules / Sources land in 8.3–8.5.
 type Deps struct {
 	Health routes.HealthDeps
+	Runs   routes.RunsDeps
 }
 
 // NewServer constructs a ready-to-Serve *http.Server. The server
@@ -75,6 +76,7 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 	api := humachi.New(r, humaCfg)
 
 	routes.RegisterHealth(api, deps.Health)
+	routes.RegisterRuns(api, deps.Runs)
 
 	return &http.Server{
 		Addr:              cfg.Addr,
