@@ -72,3 +72,38 @@ func extractBlockField(cap source.Capability, r source.BlockResult) (string, boo
 	}
 	return "", false
 }
+
+// extractAddressLatestField renders the AddressLatestResult field
+// corresponding to a Capability into its canonical string form.
+// Returns ok=false when the Source did not populate the field.
+//
+// Canonical forms:
+//
+//   - balance: big.Int decimal (adapter normalises hex/decimal
+//     wire forms into *big.Int before the result ever reaches here).
+//   - nonce / tx_count: base-10 decimal string.
+//
+// This helper only covers the plain AddressLatestResult fields
+// (balance, nonce, tx_count). ERC-20 balance and holdings live on
+// ERC20BalanceResult / ERC20HoldingsResult and need their own
+// extractors when that path lands.
+func extractAddressLatestField(capb source.Capability, r source.AddressLatestResult) (string, bool) {
+	switch capb {
+	case source.CapBalanceAtLatest:
+		if r.Balance == nil {
+			return "", false
+		}
+		return r.Balance.String(), true
+	case source.CapNonceAtLatest:
+		if r.Nonce == nil {
+			return "", false
+		}
+		return strconv.FormatUint(*r.Nonce, 10), true
+	case source.CapTxCountAtLatest:
+		if r.TxCount == nil {
+			return "", false
+		}
+		return strconv.FormatUint(*r.TxCount, 10), true
+	}
+	return "", false
+}

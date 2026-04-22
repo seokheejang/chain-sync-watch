@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,12 +19,17 @@ import (
 // metric values under the Tolerance a resolver hands back, and
 // persists DiffRecords for every disagreement.
 //
-// Scope in Phase 7C.1:
+// Scope in Phase 7C.3:
 //
-//   - BlockImmutable metrics only. AddressLatest / AddressAtBlock
-//     require an address-sampling stage not yet wired up
-//     (Phase 7C.2). Snapshot comparison is Observational and
-//     produces no diffs in the current engine.
+//   - BlockImmutable metrics: fetched once per block, compared
+//     across every Source that supports the Capability.
+//   - AddressLatest metrics (Phase 7C.3): when the Run carries at
+//     least one AddressSamplingPlan AND an AddressSampler is
+//     injected, ExecuteRun resolves every plan, deduplicates the
+//     merged address set, and fans out FetchAddressLatest across
+//     the Sources. ValueSnapshot.ReflectedBlock is populated so
+//     AnchorWindowed tolerance can discard stale samples.
+//   - AddressAtBlock / ERC20 / Snapshot: not yet wired.
 //   - Tolerance is resolved per Metric via the ToleranceResolver
 //     port (nil falls back to ExactMatch across all categories).
 //     Pair-wise Tolerance outcomes collapse to whole-sample
@@ -31,23 +37,26 @@ import (
 //     otherwise disagreement happens when any pair says ok=false.
 //   - DiffRepository.Save receives SaveDiffMeta (Tier derived from
 //     Capability, AnchorBlock from ChainHead.Finalized).
-//   - Per-block fetches run in parallel across Sources; blocks
-//     themselves are processed sequentially.
-//   - No RateLimitBudget interaction — Tier A only, budget is
-//     Phase 7C.2/7C.3 (Tier B sampling).
+//   - Per-block and per-address fetches run in parallel across
+//     Sources; the outer loops (blocks, addresses) are sequential.
+//   - Budget integration (7C.3): when Budget is non-nil, every
+//     AddressLatest fetch reserves one unit keyed by Source ID
+//     before the call and refunds on error. Block fetches are not
+//     yet budget-gated (low call volume; follow-up).
 //
 // Terminal states:
 //
-//   - run.Complete — reached the end of the block list without a
-//     fatal error.
-//   - run.Fail     — anchor resolution, tip resolution, or source
-//     enumeration failed; OR fewer than two Sources were
-//     configured for the chain.
+//   - run.Complete — reached the end of the block and address
+//     loops without a fatal error.
+//   - run.Fail     — anchor resolution, tip resolution, address
+//     sampling, or source enumeration failed; OR fewer than two
+//     Sources were configured for the chain.
 //
-// Per-(Source, Block, Metric) failures are non-fatal — ExecuteRun
-// skips them and continues. The run still finishes "completed"
-// because partial coverage is useful; failures surface via logs
-// (Phase 10 observability) rather than failing the whole pass.
+// Per-(Source, Block|Address, Metric) fetch failures are non-fatal
+// — ExecuteRun skips them and continues. The run still finishes
+// "completed" because partial coverage is useful; failures surface
+// via logs (Phase 10 observability) rather than failing the whole
+// pass.
 type ExecuteRun struct {
 	Runs      RunRepository
 	Diffs     DiffRepository
@@ -57,6 +66,11 @@ type ExecuteRun struct {
 	Policy    diff.JudgementPolicy
 	// Tolerance is optional; nil means DefaultToleranceResolver{}.
 	Tolerance ToleranceResolver
+	// Addresses is optional; nil disables the AddressLatest loop
+	// even when the Run carries AddressSamplingPlans.
+	Addresses AddressSampler
+	// Budget is optional; nil disables per-fetch budget accounting.
+	Budget RateLimitBudget
 }
 
 // Execute runs the full verification pipeline for runID.
@@ -116,22 +130,90 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 	})
 
 	blockMetrics := filterByCategory(run.Metrics(), verification.CatBlockImmutable)
-	if len(blockMetrics) == 0 {
-		// Nothing the MVP engine can compare — a Run of only
-		// AddressLatest / Snapshot metrics is legal but currently
-		// produces zero diffs. Phase 7 wires those up.
-		return nil
-	}
-
 	for _, block := range blocks {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if len(blockMetrics) == 0 {
+			break
 		}
 		if err := uc.compareBlock(ctx, run, block, anchor, sources, blockMetrics); err != nil {
 			return err
 		}
 	}
+
+	return uc.runAddressLatestPass(ctx, run, anchor, sources)
+}
+
+// runAddressLatestPass drives the AddressLatest stratum loop. It is
+// a no-op when any of these preconditions is unmet:
+//
+//   - The Run has no AddressSamplingPlans.
+//   - The Run has no AddressLatest metrics.
+//   - Addresses (the sampler port) is nil.
+//
+// Otherwise it resolves every plan into a concrete address set,
+// deduplicates across plans, and fans out FetchAddressLatest per
+// address.
+func (uc ExecuteRun) runAddressLatestPass(
+	ctx context.Context,
+	run *verification.Run,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+) error {
+	plans := run.AddressPlans()
+	if len(plans) == 0 || uc.Addresses == nil {
+		return nil
+	}
+	addressMetrics := filterByCategory(run.Metrics(), verification.CatAddressLatest)
+	if len(addressMetrics) == 0 {
+		return nil
+	}
+
+	addrs, err := uc.collectAddresses(ctx, run.ChainID(), plans, anchor)
+	if err != nil {
+		return fmt.Errorf("execute run: address sampling: %w", err)
+	}
+	for _, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := uc.compareAddressLatest(ctx, run, addr, anchor, sources, addressMetrics); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// collectAddresses resolves every plan through the sampler port and
+// returns the deduplicated, byte-sorted union. An error from any
+// plan fails the whole pass — partial address coverage would skew
+// the comparison silently.
+func (uc ExecuteRun) collectAddresses(
+	ctx context.Context,
+	chainID chain.ChainID,
+	plans []verification.AddressSamplingPlan,
+	anchor chain.BlockNumber,
+) ([]chain.Address, error) {
+	seen := map[chain.Address]struct{}{}
+	var out []chain.Address
+	for _, p := range plans {
+		got, err := uc.Addresses.Sample(ctx, chainID, p, anchor)
+		if err != nil {
+			return nil, fmt.Errorf("plan %q: %w", p.Kind(), err)
+		}
+		for _, a := range got {
+			if _, dup := seen[a]; dup {
+				continue
+			}
+			seen[a] = struct{}{}
+			out = append(out, a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Bytes(), out[j].Bytes()) < 0
+	})
+	return out, nil
 }
 
 // compareBlock fetches `block` from every Source in parallel and
@@ -196,6 +278,117 @@ func (uc ExecuteRun) compareBlock(
 		}
 	}
 	return nil
+}
+
+// compareAddressLatest fetches address latest state from every
+// Source in parallel and emits a DiffRecord for each AddressLatest
+// metric where the configured Tolerance says the sources disagree.
+// ValueSnapshot.ReflectedBlock is populated from the source
+// response so AnchorWindowed tolerance can discard stale samples
+// — critical for CatAddressLatest because different indexers race
+// the tip by one or two blocks.
+func (uc ExecuteRun) compareAddressLatest(
+	ctx context.Context,
+	run *verification.Run,
+	addr chain.Address,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+	metrics []verification.Metric,
+) error {
+	results := uc.fetchAddressLatestAll(ctx, sources, addr)
+	resolver := uc.resolver()
+
+	for _, m := range metrics {
+		snapshots := map[source.SourceID]diff.ValueSnapshot{}
+		for _, fr := range results {
+			if fr.err != nil {
+				continue
+			}
+			if !fr.source.Supports(m.Capability) {
+				continue
+			}
+			raw, ok := extractAddressLatestField(m.Capability, fr.result)
+			if !ok {
+				continue
+			}
+			snapshots[fr.source.ID()] = diff.ValueSnapshot{
+				Raw:            raw,
+				FetchedAt:      fr.result.FetchedAt,
+				ReflectedBlock: fr.result.ReflectedBlock,
+			}
+		}
+		if len(snapshots) < 2 {
+			continue
+		}
+		outcome := applyTolerance(resolver.For(m), m, snapshots, anchor)
+		switch outcome {
+		case toleranceAgree, toleranceDiscard:
+			continue
+		case toleranceDisagree:
+			a := addr
+			d, err := diff.NewDiscrepancy(
+				run.ID(),
+				m,
+				anchor,
+				diff.Subject{Type: diff.SubjectAddress, Address: &a},
+				snapshots,
+				uc.Clock.Now(),
+			)
+			if err != nil {
+				continue
+			}
+			j := uc.Policy.Judge(d)
+			meta := SaveDiffMeta{
+				Tier:        m.Capability.Tier(),
+				AnchorBlock: anchor,
+			}
+			if _, err := uc.Diffs.Save(ctx, &d, j, meta); err != nil {
+				return fmt.Errorf("execute run: save diff (address): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// addrFetchResult pairs a Source with its FetchAddressLatest outcome.
+type addrFetchResult struct {
+	source source.Source
+	result source.AddressLatestResult
+	err    error
+}
+
+// fetchAddressLatestAll fans out FetchAddressLatest across every
+// Source in parallel. When Budget is non-nil, each source reserves
+// one unit keyed by Source ID before the call; a Reserve failure
+// (ErrBudgetExhausted) records the error on that slot and skips the
+// fetch. A fetch error after a successful Reserve triggers a Refund
+// — the upstream never counted a call that failed in transit.
+func (uc ExecuteRun) fetchAddressLatestAll(
+	ctx context.Context,
+	sources []source.Source,
+	addr chain.Address,
+) []addrFetchResult {
+	results := make([]addrFetchResult, len(sources))
+	var wg sync.WaitGroup
+	wg.Add(len(sources))
+	for i, s := range sources {
+		go func() {
+			defer wg.Done()
+			if uc.Budget != nil {
+				if err := uc.Budget.Reserve(ctx, s.ID(), 1); err != nil {
+					results[i] = addrFetchResult{source: s, err: err}
+					return
+				}
+			}
+			r, err := s.FetchAddressLatest(ctx, source.AddressQuery{Address: addr})
+			if err != nil && uc.Budget != nil {
+				_ = uc.Budget.Refund(ctx, s.ID(), 1)
+			}
+			results[i] = addrFetchResult{source: s, result: r, err: err}
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 // resolver returns the configured ToleranceResolver or

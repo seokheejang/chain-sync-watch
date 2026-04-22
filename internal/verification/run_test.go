@@ -49,6 +49,65 @@ func TestNewRun_Success(t *testing.T) {
 	require.Equal(t, "", r.ErrorMessage())
 	require.Len(t, r.Metrics(), 2)
 	require.Equal(t, verification.ManualTrigger{User: "alice"}, r.Trigger())
+	require.Nil(t, r.AddressPlans())
+}
+
+func TestNewRun_WithAddressPlans(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	plans := []verification.AddressSamplingPlan{
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+		verification.TopNHolders{N: 50},
+	}
+	r, err := verification.NewRun(
+		"rid-2",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBalanceLatest},
+		verification.ManualTrigger{User: "alice"},
+		now,
+		plans...,
+	)
+	require.NoError(t, err)
+
+	got := r.AddressPlans()
+	require.Len(t, got, 2)
+	require.Equal(t, verification.KindKnownAddresses, got[0].Kind())
+	require.Equal(t, verification.KindTopNHolders, got[1].Kind())
+}
+
+func TestNewRun_RejectsNilAddressPlan(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	_, err := verification.NewRun(
+		"rid-3",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBalanceLatest},
+		verification.ManualTrigger{User: "alice"},
+		now,
+		nil,
+	)
+	require.Error(t, err)
+}
+
+func TestRun_AddressPlans_ReturnsDefensiveCopy(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	r, err := verification.NewRun(
+		"rid-4",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBalanceLatest},
+		verification.ManualTrigger{User: "alice"},
+		now,
+		verification.TopNHolders{N: 50},
+	)
+	require.NoError(t, err)
+
+	got := r.AddressPlans()
+	got[0] = verification.KnownAddresses{}
+
+	again := r.AddressPlans()
+	require.Equal(t, verification.KindTopNHolders, again[0].Kind())
 }
 
 func TestNewRun_ValidationErrors(t *testing.T) {

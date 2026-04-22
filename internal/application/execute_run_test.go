@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"errors"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func newExecFixture() *execFixture {
 	}
 }
 
-func (f *execFixture) seedRun(t *testing.T, id verification.RunID, metrics []verification.Metric, blocks []chain.BlockNumber) {
+func (f *execFixture) seedRun(t *testing.T, id verification.RunID, metrics []verification.Metric, blocks []chain.BlockNumber, plans ...verification.AddressSamplingPlan) {
 	t.Helper()
 	r, err := verification.NewRun(
 		id,
@@ -68,9 +69,23 @@ func (f *execFixture) seedRun(t *testing.T, id verification.RunID, metrics []ver
 		metrics,
 		verification.ManualTrigger{User: "u"},
 		f.baseTime,
+		plans...,
 	)
 	require.NoError(t, err)
 	require.NoError(t, f.runs.Save(context.Background(), r))
+}
+
+func mkAddressLatest(t *testing.T, bal uint64, nonce uint64, reflected uint64) source.AddressLatestResult {
+	t.Helper()
+	b := new(big.Int).SetUint64(bal)
+	n := nonce
+	rb := chain.BlockNumber(reflected)
+	return source.AddressLatestResult{
+		Balance:        b,
+		Nonce:          &n,
+		FetchedAt:      time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		ReflectedBlock: &rb,
+	}
 }
 
 func mkBlockResult(t *testing.T, hashHex, parentHex string, ts int64, txCount uint64) source.BlockResult {
@@ -403,11 +418,193 @@ func TestExecuteRun_CannotStartFromNonPendingRun(t *testing.T) {
 		[]verification.Metric{verification.MetricBlockHash},
 		[]chain.BlockNumber{},
 	)
-	// Manually transition the Run past pending to trigger the guard.
 	r, _ := f.runs.FindByID(context.Background(), "r1")
 	require.NoError(t, r.Start(f.baseTime))
 	require.NoError(t, f.runs.Save(context.Background(), r))
 
 	err := f.useCase.Execute(context.Background(), "r1")
 	require.Error(t, err)
+}
+
+func TestExecuteRun_AddressLatest_DisagreementProducesDiff(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	rpc.SetAddressLatestResponse(mkAddressLatest(t, 1000, 5, 990), nil)
+	bs.SetAddressLatestResponse(mkAddressLatest(t, 2000, 5, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, err := f.diffs.FindByRun(context.Background(), "r1")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	require.Equal(t, verification.MetricBalanceLatest.Key, d.Metric.Key)
+	require.Equal(t, diff.SubjectAddress, d.Subject.Type)
+	require.NotNil(t, d.Subject.Address)
+	require.Equal(t, addr, *d.Subject.Address)
+	require.Equal(t, "1000", d.Values["rpc"].Raw)
+	require.Equal(t, "2000", d.Values["blockscout"].Raw)
+
+	require.Len(t, sampler.Calls, 1)
+	require.Equal(t, verification.KindKnownAddresses, sampler.Calls[0].Kind)
+	require.Equal(t, chain.BlockNumber(990), sampler.Calls[0].At)
+}
+
+func TestExecuteRun_AddressLatest_NoPlansSkipsPass(t *testing.T) {
+	f := newExecFixture()
+	sampler := testsupport.NewFakeAddressSampler()
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count())
+	require.Empty(t, sampler.Calls, "sampler must not be called when Run has no plans")
+}
+
+func TestExecuteRun_AddressLatest_NilSamplerSkipsPass(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	rpc.SetAddressLatestResponse(mkAddressLatest(t, 1000, 5, 990), nil)
+	bs.SetAddressLatestResponse(mkAddressLatest(t, 2000, 5, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "address loop must no-op when Addresses port is nil")
+}
+
+func TestExecuteRun_AddressLatest_DedupesAcrossPlans(t *testing.T) {
+	f := newExecFixture()
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{a, b}
+	sampler.Results[verification.KindTopNHolders] = []chain.Address{b}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	rpc.SetAddressLatestResponse(mkAddressLatest(t, 1000, 5, 990), nil)
+	bs.SetAddressLatestResponse(mkAddressLatest(t, 1000, 5, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+		verification.TopNHolders{N: 10},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "agreeing values must not produce diffs")
+
+	require.Len(t, sampler.Calls, 2, "both plans should be invoked once each")
+}
+
+func TestExecuteRun_AddressLatest_BudgetExhaustedSkipsSource(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	budget := testsupport.NewFakeRateLimitBudget(map[source.SourceID]int{
+		"rpc":        10,
+		"blockscout": 10,
+		"indexer":    0,
+	})
+	f.useCase.Budget = budget
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	idx := fake.New("indexer", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	rpc.SetAddressLatestResponse(mkAddressLatest(t, 1000, 5, 990), nil)
+	bs.SetAddressLatestResponse(mkAddressLatest(t, 2000, 5, 990), nil)
+	idx.SetAddressLatestResponse(mkAddressLatest(t, 9999, 5, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+	f.gateway.Register(idx)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, err := f.diffs.FindByRun(context.Background(), "r1")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	_, hasIndexer := d.Values["indexer"]
+	require.False(t, hasIndexer, "indexer should be skipped due to budget exhaustion")
+
+	require.Equal(t, 9, budget.Remaining("rpc"))
+	require.Equal(t, 9, budget.Remaining("blockscout"))
+	require.Equal(t, 0, budget.Remaining("indexer"))
+}
+
+func TestExecuteRun_AddressLatest_SamplerErrorFailsRun(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Err = errors.New("sampler exploded")
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapBalanceAtLatest))
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricBalanceLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	err := f.useCase.Execute(context.Background(), "r1")
+	require.Error(t, err)
+
+	r, _ := f.runs.FindByID(context.Background(), "r1")
+	require.Equal(t, verification.StatusFailed, r.Status())
 }

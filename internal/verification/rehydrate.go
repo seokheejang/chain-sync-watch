@@ -32,6 +32,7 @@ func Rehydrate(
 	startedAt *time.Time,
 	finishedAt *time.Time,
 	errorMsg string,
+	addressPlans ...AddressSamplingPlan,
 ) (*Run, error) {
 	if id == "" {
 		return nil, errors.New("rehydrate run: id is empty")
@@ -55,6 +56,12 @@ func Rehydrate(
 	m := make([]Metric, len(metrics))
 	copy(m, metrics)
 
+	var plans []AddressSamplingPlan
+	if len(addressPlans) > 0 {
+		plans = make([]AddressSamplingPlan, len(addressPlans))
+		copy(plans, addressPlans)
+	}
+
 	var startedCopy, finishedCopy *time.Time
 	if startedAt != nil {
 		t := *startedAt
@@ -66,15 +73,16 @@ func Rehydrate(
 	}
 
 	return &Run{
-		id:         id,
-		chainID:    cid,
-		strategy:   strategy,
-		metrics:    m,
-		trigger:    trigger,
-		status:     status,
-		createdAt:  createdAt,
-		startedAt:  startedCopy,
-		finishedAt: finishedCopy,
-		errorMsg:   errorMsg,
+		id:           id,
+		chainID:      cid,
+		strategy:     strategy,
+		addressPlans: plans,
+		metrics:      m,
+		trigger:      trigger,
+		status:       status,
+		createdAt:    createdAt,
+		startedAt:    startedCopy,
+		finishedAt:   finishedCopy,
+		errorMsg:     errorMsg,
 	}, nil
 }

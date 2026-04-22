@@ -67,17 +67,23 @@ func (s Status) IsTerminal() bool {
 // the application layer drives its state transitions. The domain
 // package provides no clock of its own; callers pass the current
 // time into each transition so tests remain deterministic.
+//
+// addressPlans is optional: a zero-length slice is valid and means
+// "no address-stratum coverage". ExecuteRun uses it exclusively for
+// AddressLatest / AddressAtBlock metrics; BlockImmutable passes
+// require only the block-level SamplingStrategy.
 type Run struct {
-	id         RunID
-	chainID    chain.ChainID
-	strategy   SamplingStrategy
-	metrics    []Metric
-	trigger    Trigger
-	status     Status
-	createdAt  time.Time
-	startedAt  *time.Time
-	finishedAt *time.Time
-	errorMsg   string
+	id           RunID
+	chainID      chain.ChainID
+	strategy     SamplingStrategy
+	addressPlans []AddressSamplingPlan
+	metrics      []Metric
+	trigger      Trigger
+	status       Status
+	createdAt    time.Time
+	startedAt    *time.Time
+	finishedAt   *time.Time
+	errorMsg     string
 }
 
 // NewRun constructs a Run in the pending state after validating the
@@ -89,8 +95,10 @@ type Run struct {
 //   - metrics must be non-empty
 //   - trigger must be non-nil
 //
-// The metrics slice is copied so later mutations by the caller
-// cannot reach the aggregate's internal state.
+// addressPlans is variadic and optional — zero plans is valid. Each
+// plan must be non-nil. The metrics and addressPlans slices are
+// copied so later mutations by the caller cannot reach the
+// aggregate's internal state.
 func NewRun(
 	id RunID,
 	cid chain.ChainID,
@@ -98,6 +106,7 @@ func NewRun(
 	metrics []Metric,
 	trigger Trigger,
 	createdAt time.Time,
+	addressPlans ...AddressSamplingPlan,
 ) (*Run, error) {
 	if id == "" {
 		return nil, errors.New("run: id is empty")
@@ -114,16 +123,27 @@ func NewRun(
 	if trigger == nil {
 		return nil, errors.New("run: trigger is nil")
 	}
+	for i, p := range addressPlans {
+		if p == nil {
+			return nil, fmt.Errorf("run: address plan %d is nil", i)
+		}
+	}
 	m := make([]Metric, len(metrics))
 	copy(m, metrics)
+	var plans []AddressSamplingPlan
+	if len(addressPlans) > 0 {
+		plans = make([]AddressSamplingPlan, len(addressPlans))
+		copy(plans, addressPlans)
+	}
 	return &Run{
-		id:        id,
-		chainID:   cid,
-		strategy:  strategy,
-		metrics:   m,
-		trigger:   trigger,
-		status:    StatusPending,
-		createdAt: createdAt,
+		id:           id,
+		chainID:      cid,
+		strategy:     strategy,
+		addressPlans: plans,
+		metrics:      m,
+		trigger:      trigger,
+		status:       StatusPending,
+		createdAt:    createdAt,
 	}, nil
 }
 
@@ -155,6 +175,19 @@ func (r *Run) ErrorMessage() string { return r.errorMsg }
 func (r *Run) Metrics() []Metric {
 	out := make([]Metric, len(r.metrics))
 	copy(out, r.metrics)
+	return out
+}
+
+// AddressPlans returns a defensive copy of the configured address
+// sampling plans. A zero-length result means the Run does not cover
+// any address-stratum metrics; ExecuteRun skips its address loop in
+// that case.
+func (r *Run) AddressPlans() []AddressSamplingPlan {
+	if len(r.addressPlans) == 0 {
+		return nil
+	}
+	out := make([]AddressSamplingPlan, len(r.addressPlans))
+	copy(out, r.addressPlans)
 	return out
 }
 
