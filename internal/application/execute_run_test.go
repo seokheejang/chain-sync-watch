@@ -102,6 +102,24 @@ func mkAddressAtBlock(t *testing.T, bal uint64, nonce uint64, block uint64) sour
 	}
 }
 
+func mkHolding(t *testing.T, contractHex string, bal uint64) source.TokenHolding {
+	t.Helper()
+	return source.TokenHolding{
+		Contract: chain.MustAddress(contractHex),
+		Balance:  new(big.Int).SetUint64(bal),
+	}
+}
+
+func mkERC20Holdings(t *testing.T, reflected uint64, holdings ...source.TokenHolding) source.ERC20HoldingsResult {
+	t.Helper()
+	rb := chain.BlockNumber(reflected)
+	return source.ERC20HoldingsResult{
+		Tokens:         holdings,
+		FetchedAt:      time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+		ReflectedBlock: &rb,
+	}
+}
+
 func mkBlockResult(t *testing.T, hashHex, parentHex string, ts int64, txCount uint64) source.BlockResult {
 	t.Helper()
 	h, err := chain.NewHash32(hashHex)
@@ -754,4 +772,158 @@ func TestExecuteRun_AddressAtBlock_CartesianOverBlocksAndAddresses(t *testing.T)
 	require.Equal(t, chain.BlockNumber(501), d.Block)
 	require.NotNil(t, d.Subject.Address)
 	require.Equal(t, b, *d.Subject.Address)
+}
+
+func TestExecuteRun_ERC20Holdings_DisagreementProducesDiff(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tokA := "0x0000000000000000000000000000000000000aaa"
+	tokB := "0x0000000000000000000000000000000000000bbb"
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	// Different balance on tokA.
+	rpc.SetERC20HoldingsResponse(mkERC20Holdings(t, 990,
+		mkHolding(t, tokA, 100),
+		mkHolding(t, tokB, 50),
+	), nil)
+	bs.SetERC20HoldingsResponse(mkERC20Holdings(t, 990,
+		mkHolding(t, tokA, 200),
+		mkHolding(t, tokB, 50),
+	), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20HoldingsLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, err := f.diffs.FindByRun(context.Background(), "r1")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	d := records[0].Discrepancy
+	require.Equal(t, verification.MetricERC20HoldingsLatest.Key, d.Metric.Key)
+	require.Equal(t, diff.SubjectAddress, d.Subject.Type)
+	require.NotNil(t, d.Subject.Address)
+	require.Equal(t, addr, *d.Subject.Address)
+	// Canonical form is sorted by contract, "contract=balance" joined by ';'.
+	rawRPC := d.Values["rpc"].Raw
+	rawBS := d.Values["blockscout"].Raw
+	require.Contains(t, rawRPC, "=100")
+	require.Contains(t, rawBS, "=200")
+	require.NotEqual(t, rawRPC, rawBS)
+	require.Equal(t, source.TierB, records[0].Tier)
+}
+
+func TestExecuteRun_ERC20Holdings_AgreeOnDifferentOrdering(t *testing.T) {
+	// Canonical form sorts by contract, so sources returning the
+	// same holdings in different orders must NOT produce a diff.
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tokA := "0x0000000000000000000000000000000000000aaa"
+	tokB := "0x0000000000000000000000000000000000000bbb"
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	rpc.SetERC20HoldingsResponse(mkERC20Holdings(t, 990,
+		mkHolding(t, tokA, 100),
+		mkHolding(t, tokB, 50),
+	), nil)
+	bs.SetERC20HoldingsResponse(mkERC20Holdings(t, 990,
+		mkHolding(t, tokB, 50),
+		mkHolding(t, tokA, 100),
+	), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20HoldingsLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "ordering alone must not count as disagreement")
+}
+
+func TestExecuteRun_ERC20Holdings_EmptyListOnBothAgrees(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	rpc.SetERC20HoldingsResponse(mkERC20Holdings(t, 990), nil)
+	bs.SetERC20HoldingsResponse(mkERC20Holdings(t, 990), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20HoldingsLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Zero(t, f.diffs.Count(), "empty == empty is agreement")
+}
+
+func TestExecuteRun_ERC20Holdings_BudgetExhaustedSkipsSource(t *testing.T) {
+	f := newExecFixture()
+	addr := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	tokA := "0x0000000000000000000000000000000000000aaa"
+
+	sampler := testsupport.NewFakeAddressSampler()
+	sampler.Results[verification.KindKnownAddresses] = []chain.Address{addr}
+	f.useCase.Addresses = sampler
+
+	budget := testsupport.NewFakeRateLimitBudget(map[source.SourceID]int{
+		"rpc":        10,
+		"blockscout": 10,
+		"indexer":    0,
+	})
+	f.useCase.Budget = budget
+
+	rpc := fake.New("rpc", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	bs := fake.New("blockscout", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	idx := fake.New("indexer", chain.OptimismMainnet, fake.WithCapabilities(source.CapERC20HoldingsAtLatest))
+	rpc.SetERC20HoldingsResponse(mkERC20Holdings(t, 990, mkHolding(t, tokA, 100)), nil)
+	bs.SetERC20HoldingsResponse(mkERC20Holdings(t, 990, mkHolding(t, tokA, 200)), nil)
+	idx.SetERC20HoldingsResponse(mkERC20Holdings(t, 990, mkHolding(t, tokA, 9999)), nil)
+	f.gateway.Register(rpc)
+	f.gateway.Register(bs)
+	f.gateway.Register(idx)
+
+	f.seedRun(t, "r1",
+		[]verification.Metric{verification.MetricERC20HoldingsLatest},
+		[]chain.BlockNumber{},
+		verification.KnownAddresses{Addresses: []chain.Address{addr}},
+	)
+
+	require.NoError(t, f.useCase.Execute(context.Background(), "r1"))
+	require.Equal(t, 1, f.diffs.Count())
+
+	records, _ := f.diffs.FindByRun(context.Background(), "r1")
+	require.Len(t, records, 1)
+	_, hasIndexer := records[0].Discrepancy.Values["indexer"]
+	require.False(t, hasIndexer, "indexer should be skipped due to budget exhaustion")
+	require.Equal(t, 9, budget.Remaining("rpc"))
+	require.Equal(t, 9, budget.Remaining("blockscout"))
+	require.Equal(t, 0, budget.Remaining("indexer"))
 }

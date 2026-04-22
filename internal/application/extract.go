@@ -1,7 +1,10 @@
 package application
 
 import (
+	"bytes"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/seokheejang/chain-sync-watch/internal/source"
 )
@@ -128,4 +131,51 @@ func extractAddressAtBlockField(capb source.Capability, r source.AddressAtBlockR
 		return strconv.FormatUint(*r.Nonce, 10), true
 	}
 	return "", false
+}
+
+// extractERC20HoldingsField renders ERC20HoldingsResult into a
+// canonical, order-independent string so ExactMatch tolerance can
+// tell two sources apart.
+//
+// Canonical form:
+//
+//	contract1=balance1;contract2=balance2;...
+//
+// where contracts are sorted byte-ascending on the 20-byte address
+// and balances are big.Int decimals. We deliberately omit Name /
+// Symbol / Decimals — those are metadata the source may or may not
+// populate, and including them in the canonical form would trigger
+// spurious diffs whenever one source cached a display name and
+// another did not.
+//
+// An empty holdings list (Tokens == nil OR len == 0) renders as
+// the empty string AND returns ok=true — "I checked, there is
+// nothing" is a valid observation, distinct from "I could not
+// fetch". Adapters that truly cannot serve holdings return a
+// transport error which the caller skips.
+//
+// nil Balance on a TokenHolding is a malformed record; we render
+// it as "<contract>=" so a disagreement still surfaces rather than
+// being silently dropped.
+func extractERC20HoldingsField(capb source.Capability, r source.ERC20HoldingsResult) (string, bool) {
+	if capb != source.CapERC20HoldingsAtLatest {
+		return "", false
+	}
+	holdings := make([]source.TokenHolding, len(r.Tokens))
+	copy(holdings, r.Tokens)
+	sort.Slice(holdings, func(i, j int) bool {
+		return bytes.Compare(holdings[i].Contract.Bytes(), holdings[j].Contract.Bytes()) < 0
+	})
+	var b strings.Builder
+	for i, h := range holdings {
+		if i > 0 {
+			b.WriteByte(';')
+		}
+		b.WriteString(h.Contract.String())
+		b.WriteByte('=')
+		if h.Balance != nil {
+			b.WriteString(h.Balance.String())
+		}
+	}
+	return b.String(), true
 }

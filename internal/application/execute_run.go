@@ -19,7 +19,7 @@ import (
 // metric values under the Tolerance a resolver hands back, and
 // persists DiffRecords for every disagreement.
 //
-// Scope in Phase 7G:
+// Scope in Phase 7H:
 //
 //   - BlockImmutable metrics: fetched once per block, compared
 //     across every Source that supports the Capability.
@@ -34,7 +34,12 @@ import (
 //     fan-out is (address × block) cartesian over the Run's block
 //     sampling strategy. Sources that don't support archive reads
 //     return ErrUnsupported and are skipped.
-//   - ERC20 / Snapshot: not yet wired.
+//   - ERC20 holdings (Phase 7H): per-address FetchERC20Holdings with
+//     a canonical sorted "contract=balance" serialization, driven by
+//     the same AddressSamplingPlan set. Tier B metric — Budget
+//     reserve/refund is applied. ERC20 balance (per-token) needs a
+//     TokenSamplingPlan and is deferred.
+//   - Snapshot: not yet wired.
 //   - Tolerance is resolved per Metric via the ToleranceResolver
 //     port (nil falls back to ExactMatch across all categories).
 //     Pair-wise Tolerance outcomes collapse to whole-sample
@@ -150,7 +155,10 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 	if err := uc.runAddressLatestPass(ctx, run, anchor, sources); err != nil {
 		return err
 	}
-	return uc.runAddressAtBlockPass(ctx, run, blocks, anchor, sources)
+	if err := uc.runAddressAtBlockPass(ctx, run, blocks, anchor, sources); err != nil {
+		return err
+	}
+	return uc.runERC20HoldingsLatestPass(ctx, run, anchor, sources)
 }
 
 // runAddressLatestPass drives the AddressLatest stratum loop. It is
@@ -242,6 +250,156 @@ func (uc ExecuteRun) runAddressAtBlockPass(
 		}
 	}
 	return nil
+}
+
+// runERC20HoldingsLatestPass drives the ERC-20 holdings pass. Same
+// preconditions as runAddressLatestPass, but filtered by Capability
+// (CapERC20HoldingsAtLatest) rather than Category — MetricERC20*
+// share the CatAddressLatest category with plain balance/nonce
+// metrics, so a category filter would fan out to the wrong fetch
+// method.
+//
+// Comparison is exact-string on the canonical serialization emitted
+// by extractERC20HoldingsField. Sources that filter spam tokens
+// will naturally disagree with sources that do not; operators who
+// do not want to see those diffs wire an Observational tolerance
+// override for MetricERC20HoldingsLatest.
+func (uc ExecuteRun) runERC20HoldingsLatestPass(
+	ctx context.Context,
+	run *verification.Run,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+) error {
+	plans := run.AddressPlans()
+	if len(plans) == 0 || uc.Addresses == nil {
+		return nil
+	}
+	metrics := filterByCapability(run.Metrics(), source.CapERC20HoldingsAtLatest)
+	if len(metrics) == 0 {
+		return nil
+	}
+	addrs, err := uc.collectAddresses(ctx, run.ChainID(), plans, anchor)
+	if err != nil {
+		return fmt.Errorf("execute run: erc20-holdings sampling: %w", err)
+	}
+	for _, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := uc.compareERC20HoldingsLatest(ctx, run, addr, anchor, sources, metrics); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// compareERC20HoldingsLatest fetches the holdings for `addr` from
+// every Source in parallel and emits a DiffRecord whenever the
+// canonical serializations disagree. Discrepancy.Block is the
+// Run's finalized anchor — "latest" observations are ambient rather
+// than keyed to a specific queried height, so we use anchor as a
+// stable identifier (same convention compareAddressLatest uses).
+func (uc ExecuteRun) compareERC20HoldingsLatest(
+	ctx context.Context,
+	run *verification.Run,
+	addr chain.Address,
+	anchor chain.BlockNumber,
+	sources []source.Source,
+	metrics []verification.Metric,
+) error {
+	results := uc.fetchERC20HoldingsAll(ctx, sources, addr)
+	resolver := uc.resolver()
+
+	for _, m := range metrics {
+		snapshots := map[source.SourceID]diff.ValueSnapshot{}
+		for _, fr := range results {
+			if fr.err != nil {
+				continue
+			}
+			if !fr.source.Supports(m.Capability) {
+				continue
+			}
+			raw, ok := extractERC20HoldingsField(m.Capability, fr.result)
+			if !ok {
+				continue
+			}
+			snapshots[fr.source.ID()] = diff.ValueSnapshot{
+				Raw:            raw,
+				FetchedAt:      fr.result.FetchedAt,
+				ReflectedBlock: fr.result.ReflectedBlock,
+			}
+		}
+		if len(snapshots) < 2 {
+			continue
+		}
+		outcome := applyTolerance(resolver.For(m), m, snapshots, anchor)
+		switch outcome {
+		case toleranceAgree, toleranceDiscard:
+			continue
+		case toleranceDisagree:
+			a := addr
+			d, err := diff.NewDiscrepancy(
+				run.ID(),
+				m,
+				anchor,
+				diff.Subject{Type: diff.SubjectAddress, Address: &a},
+				snapshots,
+				uc.Clock.Now(),
+			)
+			if err != nil {
+				continue
+			}
+			j := uc.Policy.Judge(d)
+			meta := SaveDiffMeta{
+				Tier:        m.Capability.Tier(),
+				AnchorBlock: anchor,
+			}
+			if _, err := uc.Diffs.Save(ctx, &d, j, meta); err != nil {
+				return fmt.Errorf("execute run: save diff (erc20-holdings): %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// erc20HoldingsFetchResult pairs a Source with its FetchERC20Holdings
+// outcome.
+type erc20HoldingsFetchResult struct {
+	source source.Source
+	result source.ERC20HoldingsResult
+	err    error
+}
+
+// fetchERC20HoldingsAll fans out FetchERC20Holdings across every
+// Source in parallel with the same Budget reserve/refund semantics
+// as fetchAddressLatestAll. Holdings is Tier B (indexer-derived),
+// so callers almost always run this with a Budget wired up.
+func (uc ExecuteRun) fetchERC20HoldingsAll(
+	ctx context.Context,
+	sources []source.Source,
+	addr chain.Address,
+) []erc20HoldingsFetchResult {
+	results := make([]erc20HoldingsFetchResult, len(sources))
+	var wg sync.WaitGroup
+	wg.Add(len(sources))
+	for i, s := range sources {
+		go func() {
+			defer wg.Done()
+			if uc.Budget != nil {
+				if err := uc.Budget.Reserve(ctx, s.ID(), 1); err != nil {
+					results[i] = erc20HoldingsFetchResult{source: s, err: err}
+					return
+				}
+			}
+			r, err := s.FetchERC20Holdings(ctx, source.ERC20HoldingsQuery{Address: addr})
+			if err != nil && uc.Budget != nil {
+				_ = uc.Budget.Refund(ctx, s.ID(), 1)
+			}
+			results[i] = erc20HoldingsFetchResult{source: s, result: r, err: err}
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 // collectAddresses resolves every plan through the sampler port and
@@ -664,6 +822,20 @@ func filterByCategory(metrics []verification.Metric, c verification.MetricCatego
 	out := make([]verification.Metric, 0, len(metrics))
 	for _, m := range metrics {
 		if m.Category == c {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// filterByCapability returns the subset of metrics whose Capability
+// matches. Used by passes that share a Category with other passes
+// (e.g., ERC20 holdings vs plain balance — both CatAddressLatest)
+// and therefore cannot rely on a category filter alone.
+func filterByCapability(metrics []verification.Metric, c source.Capability) []verification.Metric {
+	out := make([]verification.Metric, 0, len(metrics))
+	for _, m := range metrics {
+		if m.Capability == c {
 			out = append(out, m)
 		}
 	}
