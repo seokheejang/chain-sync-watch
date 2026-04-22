@@ -107,6 +107,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		Logger:     logger,
 	}
 	mux := asynq.NewServeMux()
+	mux.Use(queue.LoggingMiddleware(logger))
 	handlers.Register(mux)
 
 	healthAddr := envOrDefault("CSW_WORKER_HEALTH_ADDR", ":8081")
