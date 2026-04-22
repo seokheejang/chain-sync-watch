@@ -47,12 +47,12 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-22 (Phase 7A/7B/7C.1/7C.2/7C.3 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 7 진행 중 — asynq queue 배선 + RedisBudget + ToleranceResolver + DiffRepository.Save meta + AddressSamplingPlan 도메인 + AddressSampler 포트 + ExecuteRun AddressLatest 경로(+ Budget 통합) 완료. 다음은 Phase 7D (ScheduledRun 실구현 + durable schedule store)**
+**최종 업데이트**: 2026-04-22 (Phase 7A~7F 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 7 종반 — queue/budget/tolerance/address-sampling/persistence/scheduled-run/durable-schedule-store/scheduled-plans 모두 배선됨. cron → Run 생성 경로에서 AddressLatest 커버리지까지 end-to-end. 다음은 AddressAtBlock 경로 확장 → asynqmon/observability → Phase 8 HTTP API 순.**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
-### 완료 (committed, origin/main 대비 16 커밋 앞섬)
+### 완료 (committed)
 
 | 구분 | 커밋 |
 |---|---|
@@ -78,26 +78,28 @@ examples/
 | **Phase 7A** — asynq dispatcher + worker skeleton + handlers + scheduler + health endpoints | `48b8335` |
 | **Phase 7B** — RedisBudget for RateLimitBudget port | `72bb57d` |
 | **Phase 7C.1** — application.ToleranceResolver + DiffRepository.Save meta (Tier/AnchorBlock/SamplingSeed) | `d837cdc` |
-| **Phase 7C.2** — verification.AddressSamplingPlan 4종 (Known/TopN/Random/RecentlyActive) + application.AddressSampler 포트 + FakeAddressSampler | _uncommitted_ |
-| **Phase 7C.3** — Run.addressPlans + ExecuteRun AddressLatest 경로 (parallel fan-out, AnchorWindowed-ready snapshots, Budget reserve/refund) | _uncommitted_ |
+| **Phase 7C.2** — verification.AddressSamplingPlan 4종 (Known/TopN/Random/RecentlyActive) + application.AddressSampler 포트 + FakeAddressSampler | `9699332` |
+| **Phase 7C.3** — Run.addressPlans + ExecuteRun AddressLatest 경로 (parallel fan-out, AnchorWindowed-ready snapshots, Budget reserve/refund) | `4bcce6c` |
+| **Phase 7C.4** — persistence `address_plans` JSONB 컬럼 + mapper round-trip + integration 테스트 보강 | `5f21b5e` |
+| **Phase 7D+7E+7F** — scheduled-run end-to-end 파이프라인: ① `HandleScheduledRun` 실구현 (payload→Run→save→enqueue) + persistence 헬퍼 export + Dispatcher 와이어포맷 통일; ② durable schedule store (마이그레이션 003 `schedules` 테이블, `ScheduleRecord`/`ScheduleRepository` 포트, gorm 구현체, Dispatcher의 in-memory store→DB-backed `dbConfigProvider` refactor, worker main `Scheduler.Start()` 배선); ③ scheduled 경로에 AddressSamplingPlan 전파 (마이그레이션 004 `schedules.address_plans` JSONB, `SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput`/`ScheduledRunPayload` plans 필드, 핸들러와 `ScheduleRun` 유스케이스 pass-through) | `51af054` |
 
 ### 진행 중
 
-- Phase 7D — `ScheduledRun` handler 실구현 (현재 7A stub). durable schedule store 설계 포함.
-- (follow-up) Run persistence 스키마에 `addressPlans` 열 추가 — 현재 mapper는 rehydrate 시 plans를 빈 슬라이스로 돌려주므로 enqueue → rehydrate → ExecuteRun 경로에서 AddressLatest 커버리지가 끊김. 인메모리 테스트는 정상 동작.
 - (follow-up) AddressAtBlock / ERC-20 balance+holdings / Snapshot 경로. 현재 ExecuteRun은 AddressLatest만 비교.
 - (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest fetch에만 적용됨.
+- (follow-up) asynqmon docker-compose override + 핸들러 메트릭 (Phase 7.6 잔여).
 
 ### 남은 잔여 & 미구현
 
 - **Phase 3F `adapters/etherscan/`** → **post-MVP로 연기**. Free tier가 Optimism 미커버라 MVP에서 가치 없음. Ethereum mainnet 확장 시점에 구현 (ethscan.Client 재사용이라 1일 이내 추정).
 - **Phase 3G `examples/custom-graphql-adapter/`** → 간단 스켈레톤. Phase 4/5 도메인 확정 후 작성하면 예시가 실제와 일치 (Phase 7/8 즈음에 끼워넣기 좋음).
-- **Phase 7 잔여 (진행 중)**:
-  - **7C.2**: 4-stratum 주소 샘플링 (known / top-N / random / recently-active). `AddressSamplingPlan` 도메인 값객체 + `AddressSampler` 포트 + 인프라 구현체.
-  - **7C.3**: ExecuteRun AddressLatest / AddressAtBlock Tier B 경로 + budget `Reserve/Refund` 통합.
-  - **ScheduledRun handler 실구현** — 현재 7A stub. durable schedule store (Postgres `schedules` 테이블) + `HandleScheduledRun`이 payload로 Run을 materialize → ExecuteRun enqueue.
-  - **asynqmon / observability 7.6** — docker-compose override + 핸들러 metrics (성공/실패 카운트, 처리 시간).
-- **Phase 6 잔여 — Phase 7/10에서 해소**:
+- **ExecuteRun 커버리지 확장** (Phase 7G~):
+  - **AddressAtBlock** 경로 — AddressLatest 패턴 재사용하되 `FetchAddressAtBlock` + `extractAddressAtBlockField` 신규 + Subject는 Address + Block 양쪽 보유. 중간 정도 사이즈.
+  - **ERC-20 `CapERC20BalanceAtLatest` / `CapERC20HoldingsAtLatest`** — 각각 `FetchERC20Balance` / `FetchERC20Holdings` 기반. 추출기 + 비교 루프 신규.
+  - **Snapshot** (`CapTotalAddressCount` 등) — Observational 기본이라 현재 `DefaultPolicy`가 Info로 suppress. 관찰용 뷰 필요 시 Phase 8/9 API/UI 시점에 복원.
+  - **Block fetch 경로에도 Budget 통합** — 현재 Budget은 AddressLatest fetch에만 적용됨. 사용자 RPC 엔드포인트도 quota 있을 수 있어 확장 여지.
+- **asynqmon + 핸들러 메트릭** (Phase 7.6) — docker-compose.override.yml에 asynqmon 추가 + slogMiddleware로 핸들러 처리시간/성공-실패 카운트 로깅. 선택: Prometheus exporter.
+- **Phase 6 잔여**:
   - ✅ `DiffRepository.Save` meta 확장 완료 (7C.1).
   - 사용자 정의 Metric 영속화 미지원 — mapper는 `verification.AllMetrics()` 카탈로그 키만 인식. 필요 시 `metric_category` 컬럼을 함께 저장하고 Metric 재구성 로직 추가.
   - 통합 테스트는 `-tags=integration` + Docker 필요. CI 파이프라인(Phase 10)에서 자동 실행되게 훅 걸어야 함.
@@ -105,11 +107,12 @@ examples/
 
 ### 다음 세션 재개 절차
 
-1. **Phase 7C.2 착수** — `internal/verification/address_sampling.go` 값객체 (known / top_n / random / recently_active) + black-box 테스트. 그 다음 `internal/application/ports.go`에 `AddressSampler` 포트 추가, 그 다음 `internal/infrastructure/sampling/` 구현체.
-2. 7C.3 — ExecuteRun AddressLatest fan-out + budget 통합.
-3. 이후 Phase 8 (huma HTTP API) → Phase 9 (Next.js) → Phase 10 (observability + docker-compose) → Phase 11 (Helm).
-4. Phase 12 (probe context)는 Phase 8 완료 시점에 본격 설계. 현재는 스케치만.
-5. (선택) 중간 어느 시점에 Phase 3G 작성.
+1. **AddressAtBlock 경로 착수** — `internal/application/extract.go`에 `extractAddressAtBlockField` 추가 (chain/AddressAtBlockResult 기반), `ExecuteRun.runAddressAtBlockPass` 신설 (Run의 AddressPlans × 선택된 blocks 카티션). Budget은 AddressLatest와 동일 패턴 재사용. 기존 `compareAddressLatest`를 참고.
+2. **asynqmon + 핸들러 메트릭** (Phase 7.6) — docker-compose override + slog 기반 처리시간/카운트 미들웨어.
+3. 이후 **Phase 8 (huma HTTP API)** → `/api/runs`, `/api/diffs`, `/api/schedules` 리소스 3개. ScheduleRun 유스케이스 이미 준비됨 (plans 포함).
+4. Phase 9 (Next.js) → Phase 10 (observability + docker-compose 통합) → Phase 11 (Helm).
+5. Phase 12 (probe context)는 Phase 8 완료 시점에 본격 설계. 현재는 스케치만.
+6. (선택) 중간 어느 시점에 Phase 3G 작성.
 
 ### 확정 결정 (구현 완료된 것 포함)
 
@@ -126,14 +129,15 @@ examples/
 - **L2 특이필드**: backlog 유지 (post-MVP)
 - **indexer Capability 선언**: 필요 시 Phase 7에서 도입
 
-### Open Items — Phase 7 착수 전 확정 필요
+### Open Items — Phase 8 착수 전 확정 필요
 
-- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용") — Phase 7 실제 비교 시점에 결정. Phase 4 `DefaultPolicy`는 Snapshot을 Info로 고정했지만 per-metric override 필요할 수 있음.
-- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail) — Phase 7 config에 노출
+- [ ] reflected-block 메타 없는 지표의 최종 분류 (제외 vs "관찰 전용") — Phase 4 `DefaultPolicy`는 Snapshot을 Info로 고정했지만 per-metric override 필요할 수 있음. AddressAtBlock 확장 시점에 실측 데이터로 재검토.
+- [ ] rate-limit budget 정책: `exhausted_policy` 기본값 (skip/defer/fail) — 현재는 암묵적으로 `skip`(해당 source만 제외). Phase 8 config/API에 노출할 때 명시적으로 선택 가능하게.
 - [ ] Blockscout `bypass-429-option` 토큰 취득 절차 (실제 429 히트 시점에 실험)
-- [ ] `DiffRepository.Save` 시그니처 확장 여부 — Tier/AnchorBlock/SamplingSeed를 Save에 인자로 넣을지, 혹은 `SaveWithMeta` 별도 메서드로 둘지. Phase 7 ExecuteRun 업데이트 때 결정.
-- [ ] `ToleranceResolver` 포트 도입 시점 — NumericTolerance/AnchorWindowed가 per-metric으로 필요해지는 순간. Phase 7 AddressLatest 비교 착수와 맞물림.
+- [x] ✅ `DiffRepository.Save` 시그니처 확장 — `SaveDiffMeta` 구조체로 Tier/AnchorBlock/SamplingSeed 포함 (Phase 7C.1)
+- [x] ✅ `ToleranceResolver` 포트 도입 완료 (Phase 7C.1)
 - [ ] Go 툴체인 `covdata` 바이너리 누락 우회 — 현재 3개 패키지에 trivial smoke test로 회피. 장기적으로 Makefile `test` 타겟 재작성 (예: `-coverpkg` 지정) 검토.
+- [ ] 시크릿/설정 로딩 — Phase 8 csw-server 기동 시 config.yaml + env 오버라이드 실측 검증 (koanf 레이어링은 Phase 0에 있지만 end-to-end 미검증).
 
 ---
 
@@ -160,7 +164,10 @@ examples/
 | 7C.1 | Application — ToleranceResolver + DiffRepository.Save meta | ✅ Done | 5, 6 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7C.2 | Application — 4-stratum 주소 샘플링 (AddressSamplingPlan + AddressSampler 포트) | ✅ Done | 5, 7C.1 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7C.3 | Application — ExecuteRun AddressLatest 경로 + Budget reserve/refund 통합 | ✅ Done (AddressLatest) | 5, 7B, 7C.2 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
-| 7D | Queue — ScheduledRun handler 실구현 + durable schedule store | ⬜ Not started | 5, 6, 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7C.4 | Persistence — `runs.address_plans` 컬럼 + mapper round-trip | ✅ Done | 6, 7C.3 | [phase-06-persistence.md](./phase-06-persistence.md) |
+| 7D | Queue — ScheduledRun handler 실구현 (payload → Run → ExecuteRun enqueue) | ✅ Done | 5, 6, 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7E | Durable schedule store (schedules 테이블 + ScheduleRepository + DB-backed provider) | ✅ Done | 6, 7D | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7F | Scheduled payload + ScheduleRecord에 AddressSamplingPlan 포함 (schedules.address_plans 컬럼) | ✅ Done | 7C.3, 7E | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 8 | HTTP API (chi + huma) | ⬜ Not started | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
