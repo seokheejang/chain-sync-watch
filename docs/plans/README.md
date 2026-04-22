@@ -184,7 +184,7 @@ examples/
 | 8.2 | HTTP API — /runs 라우트 (POST/GET list/GET detail/POST cancel) + dto.{Sampling,Trigger,Schedule,AddressPlan}Input + CancelRun 유스케이스 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.3 | HTTP API — /diffs 라우트 (GET list/GET detail/POST replay) + /runs/{id}/diffs | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + QuerySchedules 유스케이스 (TokenPlans 라운드트립은 7I.2에서) | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
-| 8.5 | HTTP API — /sources 라우트 (capability matrix + tier) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.5 | HTTP API — /sources 라우트 (capability matrix + tier); chain_id 필수 쿼리 파라미터 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |

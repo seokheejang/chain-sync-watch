@@ -43,6 +43,7 @@ type Deps struct {
 	Runs      routes.RunsDeps
 	Diffs     routes.DiffsDeps
 	Schedules routes.SchedulesDeps
+	Sources   routes.SourcesDeps
 }
 
 // NewServer constructs a ready-to-Serve *http.Server. The server
@@ -81,6 +82,7 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 	routes.RegisterRuns(api, deps.Runs)
 	routes.RegisterDiffs(api, deps.Diffs)
 	routes.RegisterSchedules(api, deps.Schedules)
+	routes.RegisterSources(api, deps.Sources)
 
 	return &http.Server{
 		Addr:              cfg.Addr,
