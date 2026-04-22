@@ -65,7 +65,7 @@ func TestIntegrationDiffRepo_SaveAndFindByID(t *testing.T) {
 		TrustedSources: []source.SourceID{"rpc"},
 		Reasoning:      "blockscout diverged",
 	}
-	id, err := repo.Save(ctx, &d, j)
+	id, err := repo.Save(ctx, &d, j, application.SaveDiffMeta{Tier: source.TierA, AnchorBlock: 100})
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
@@ -88,7 +88,7 @@ func TestIntegrationDiffRepo_FindByRun_OrdersByDetectedAt(t *testing.T) {
 	base := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
 	for i, block := range []chain.BlockNumber{100, 101, 102} {
 		d := mkDiscrepancy(t, "rid", verification.MetricBlockHash, block, base.Add(time.Duration(i)*time.Second))
-		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical})
+		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical}, application.SaveDiffMeta{})
 		require.NoError(t, err)
 	}
 	recs, err := repo.FindByRun(ctx, "rid")
@@ -118,7 +118,7 @@ func TestIntegrationDiffRepo_ListFilterBySeverity(t *testing.T) {
 	sevs := []diff.Severity{diff.SevCritical, diff.SevWarning, diff.SevInfo}
 	for i, s := range sevs {
 		d := mkDiscrepancy(t, "rid", verification.MetricBlockHash, chain.BlockNumber(100+i), base.Add(time.Duration(i)*time.Second))
-		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: s})
+		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: s}, application.SaveDiffMeta{})
 		require.NoError(t, err)
 	}
 
@@ -138,7 +138,7 @@ func TestIntegrationDiffRepo_ListFilterByBlockRange(t *testing.T) {
 
 	for _, b := range []chain.BlockNumber{100, 200, 300, 400} {
 		d := mkDiscrepancy(t, "rid", verification.MetricBlockHash, b, base)
-		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical})
+		_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical}, application.SaveDiffMeta{})
 		require.NoError(t, err)
 	}
 
@@ -159,7 +159,7 @@ func TestIntegrationDiffRepo_MarkResolved(t *testing.T) {
 	ctx := context.Background()
 
 	d := mkDiscrepancy(t, "rid", verification.MetricBlockHash, 100, time.Now().UTC())
-	id, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical})
+	id, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical}, application.SaveDiffMeta{})
 	require.NoError(t, err)
 
 	resolvedAt := time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC)
@@ -186,7 +186,7 @@ func TestIntegrationDiffRepo_CascadeDeleteOnRun(t *testing.T) {
 	ctx := context.Background()
 
 	d := mkDiscrepancy(t, "rid-cascade", verification.MetricBlockHash, 100, time.Now().UTC())
-	_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical})
+	_, err := repo.Save(ctx, &d, diff.Judgement{Severity: diff.SevCritical}, application.SaveDiffMeta{})
 	require.NoError(t, err)
 
 	// Deleting the parent run must cascade.

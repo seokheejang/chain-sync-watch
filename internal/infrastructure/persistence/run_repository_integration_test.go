@@ -171,6 +171,61 @@ func TestIntegrationRunRepo_PersistsEveryStrategyAndTrigger(t *testing.T) {
 	}
 }
 
+func TestIntegrationRunRepo_AddressPlansRoundTrip(t *testing.T) {
+	resetDB(t)
+	repo := persistence.NewRunRepo(testDB)
+	ctx := context.Background()
+
+	created := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+
+	r, err := verification.NewRun(
+		"rid-plans",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBalanceLatest},
+		verification.ManualTrigger{User: "u"},
+		created,
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+		verification.TopNHolders{N: 25},
+		verification.RandomAddresses{Count: 5, Seed: 7},
+		verification.RecentlyActive{RecentBlocks: 200, Count: 10, Seed: 13},
+	)
+	require.NoError(t, err)
+	require.NoError(t, repo.Save(ctx, r))
+
+	got, err := repo.FindByID(ctx, "rid-plans")
+	require.NoError(t, err)
+
+	plans := got.AddressPlans()
+	require.Len(t, plans, 4)
+	require.Equal(t, verification.KindKnownAddresses, plans[0].Kind())
+	require.Equal(t, verification.KindTopNHolders, plans[1].Kind())
+	require.Equal(t, verification.KindRandomAddresses, plans[2].Kind())
+	require.Equal(t, verification.KindRecentlyActive, plans[3].Kind())
+
+	k := plans[0].(verification.KnownAddresses)
+	require.Equal(t, []chain.Address{a, b}, k.Addresses)
+
+	rn := plans[2].(verification.RandomAddresses)
+	require.Equal(t, int64(7), rn.Seed)
+}
+
+func TestIntegrationRunRepo_NoAddressPlans_DefaultEmptyArray(t *testing.T) {
+	resetDB(t)
+	repo := persistence.NewRunRepo(testDB)
+	ctx := context.Background()
+
+	created := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
+	r := newTestRun(t, "rid-default", chain.OptimismMainnet, created)
+	require.NoError(t, repo.Save(ctx, r))
+
+	got, err := repo.FindByID(ctx, "rid-default")
+	require.NoError(t, err)
+	require.Nil(t, got.AddressPlans())
+}
+
 func newRunWithStrategyAndTrigger(t *testing.T, id verification.RunID, s verification.SamplingStrategy, tr verification.Trigger, created time.Time) *verification.Run {
 	t.Helper()
 	r, err := verification.NewRun(

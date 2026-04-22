@@ -146,6 +146,139 @@ func unmarshalStrategy(kind string, data []byte) (verification.SamplingStrategy,
 	return nil, fmt.Errorf("persistence: unknown strategy kind %q", kind)
 }
 
+// --- AddressSamplingPlan serialisation -----------------------------
+//
+// The runs.address_plans column is a JSONB array of tagged envelopes
+// — one envelope per plan — so a single Run can carry multiple
+// stratums (typically known + top_n + recently_active). The envelope
+// shape mirrors the trigger/strategy pattern: a stable Kind string
+// plus an opaque Data blob whose schema is the plan-specific JSON
+// struct below. Keeping the wire format stable is a hard requirement
+// — plan Kind strings are persisted verbatim and must survive code
+// reorganisation.
+
+type addressPlanEnvelope struct {
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data"`
+}
+
+type knownAddressesJSON struct {
+	Addresses []chain.Address `json:"addresses"`
+}
+
+type topNHoldersJSON struct {
+	N uint `json:"n"`
+}
+
+type randomAddressesJSON struct {
+	Count uint  `json:"count"`
+	Seed  int64 `json:"seed"`
+}
+
+type recentlyActiveJSON struct {
+	RecentBlocks uint  `json:"recent_blocks"`
+	Count        uint  `json:"count"`
+	Seed         int64 `json:"seed"`
+}
+
+// marshalAddressPlans encodes the full plan list into the JSONB
+// array stored in runs.address_plans. An empty / nil plans slice
+// becomes "[]" rather than "null" so the NOT NULL column default
+// holds.
+func marshalAddressPlans(plans []verification.AddressSamplingPlan) ([]byte, error) {
+	if len(plans) == 0 {
+		return []byte("[]"), nil
+	}
+	envelopes := make([]addressPlanEnvelope, len(plans))
+	for i, p := range plans {
+		data, err := marshalAddressPlanData(p)
+		if err != nil {
+			return nil, err
+		}
+		envelopes[i] = addressPlanEnvelope{Kind: p.Kind(), Data: data}
+	}
+	return json.Marshal(envelopes)
+}
+
+func marshalAddressPlanData(p verification.AddressSamplingPlan) ([]byte, error) {
+	switch v := p.(type) {
+	case verification.KnownAddresses:
+		return json.Marshal(knownAddressesJSON{Addresses: v.Addresses})
+	case verification.TopNHolders:
+		return json.Marshal(topNHoldersJSON{N: v.N})
+	case verification.RandomAddresses:
+		return json.Marshal(randomAddressesJSON{Count: v.Count, Seed: v.Seed})
+	case verification.RecentlyActive:
+		return json.Marshal(recentlyActiveJSON{
+			RecentBlocks: v.RecentBlocks,
+			Count:        v.Count,
+			Seed:         v.Seed,
+		})
+	}
+	return nil, fmt.Errorf("persistence: unknown address plan type %T", p)
+}
+
+// unmarshalAddressPlans decodes the JSONB array back into the
+// domain slice. Both an empty array and literal NULL / empty bytes
+// resolve to a nil slice — the zero value semantics the Run
+// aggregate treats as "no address coverage".
+func unmarshalAddressPlans(data []byte) ([]verification.AddressSamplingPlan, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	trimmed := string(data)
+	if trimmed == "null" || trimmed == "[]" {
+		return nil, nil
+	}
+	var envelopes []addressPlanEnvelope
+	if err := json.Unmarshal(data, &envelopes); err != nil {
+		return nil, fmt.Errorf("persistence: decode address plans: %w", err)
+	}
+	out := make([]verification.AddressSamplingPlan, 0, len(envelopes))
+	for _, env := range envelopes {
+		plan, err := unmarshalAddressPlan(env.Kind, env.Data)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, plan)
+	}
+	return out, nil
+}
+
+func unmarshalAddressPlan(kind string, data []byte) (verification.AddressSamplingPlan, error) {
+	switch kind {
+	case verification.KindKnownAddresses:
+		var v knownAddressesJSON
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("persistence: decode known addresses: %w", err)
+		}
+		return verification.KnownAddresses{Addresses: v.Addresses}, nil
+	case verification.KindTopNHolders:
+		var v topNHoldersJSON
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("persistence: decode top_n_holders: %w", err)
+		}
+		return verification.TopNHolders{N: v.N}, nil
+	case verification.KindRandomAddresses:
+		var v randomAddressesJSON
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("persistence: decode random_addresses: %w", err)
+		}
+		return verification.RandomAddresses{Count: v.Count, Seed: v.Seed}, nil
+	case verification.KindRecentlyActive:
+		var v recentlyActiveJSON
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("persistence: decode recently_active: %w", err)
+		}
+		return verification.RecentlyActive{
+			RecentBlocks: v.RecentBlocks,
+			Count:        v.Count,
+			Seed:         v.Seed,
+		}, nil
+	}
+	return nil, fmt.Errorf("persistence: unknown address plan kind %q", kind)
+}
+
 // --- ValueSnapshot serialisation ----------------------------------
 
 type valueSnapshotJSON struct {

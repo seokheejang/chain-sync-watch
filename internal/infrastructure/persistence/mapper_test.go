@@ -143,6 +143,100 @@ func TestRunRoundTrip_PreservesTerminalState(t *testing.T) {
 	require.Equal(t, created.Add(2*time.Second), *got.FinishedAt())
 }
 
+func TestRunRoundTrip_AddressPlans_AllFour(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	a := chain.MustAddress("0x0000000000000000000000000000000000000001")
+	b := chain.MustAddress("0x0000000000000000000000000000000000000002")
+	plans := []verification.AddressSamplingPlan{
+		verification.KnownAddresses{Addresses: []chain.Address{a, b}},
+		verification.TopNHolders{N: 50},
+		verification.RandomAddresses{Count: 10, Seed: 42},
+		verification.RecentlyActive{RecentBlocks: 500, Count: 20, Seed: 7},
+	}
+	r, err := verification.NewRun(
+		"rid-plans",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBalanceLatest},
+		verification.ManualTrigger{User: "u"},
+		now,
+		plans...,
+	)
+	require.NoError(t, err)
+
+	m, err := toRunModel(r)
+	require.NoError(t, err)
+	require.NotNil(t, m.AddressPlans)
+	require.NotEqual(t, "[]", string(m.AddressPlans))
+
+	got, err := toRun(m)
+	require.NoError(t, err)
+
+	gotPlans := got.AddressPlans()
+	require.Len(t, gotPlans, 4)
+
+	k, ok := gotPlans[0].(verification.KnownAddresses)
+	require.True(t, ok)
+	require.Equal(t, []chain.Address{a, b}, k.Addresses)
+
+	tn, ok := gotPlans[1].(verification.TopNHolders)
+	require.True(t, ok)
+	require.Equal(t, uint(50), tn.N)
+
+	rn, ok := gotPlans[2].(verification.RandomAddresses)
+	require.True(t, ok)
+	require.Equal(t, uint(10), rn.Count)
+	require.Equal(t, int64(42), rn.Seed)
+
+	ra, ok := gotPlans[3].(verification.RecentlyActive)
+	require.True(t, ok)
+	require.Equal(t, uint(500), ra.RecentBlocks)
+	require.Equal(t, uint(20), ra.Count)
+	require.Equal(t, int64(7), ra.Seed)
+}
+
+func TestRunRoundTrip_NoAddressPlans_EmptyArray(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	r, err := verification.NewRun(
+		"rid-no-plans",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBlockHash},
+		verification.ManualTrigger{User: "u"},
+		now,
+	)
+	require.NoError(t, err)
+
+	m, err := toRunModel(r)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(m.AddressPlans))
+
+	got, err := toRun(m)
+	require.NoError(t, err)
+	require.Nil(t, got.AddressPlans())
+}
+
+func TestRunRoundTrip_AddressPlans_NullTolerated(t *testing.T) {
+	// Rows written before migration 002 may arrive with NULL / nil bytes
+	// in address_plans; toRun must treat that the same as an empty list
+	// so older rows stay rehydrateable.
+	m := runModel{
+		ID:           "rid",
+		ChainID:      10,
+		Status:       "pending",
+		TriggerType:  "manual",
+		TriggerData:  []byte(`{"user":"u"}`),
+		StrategyKind: "latest_n",
+		StrategyData: []byte(`{"n":1}`),
+		AddressPlans: nil,
+		Metrics:      []string{verification.MetricBlockHash.Key},
+		CreatedAt:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+	}
+	got, err := toRun(m)
+	require.NoError(t, err)
+	require.Nil(t, got.AddressPlans())
+}
+
 func TestRunRoundTrip_RejectsUnknownMetricKey(t *testing.T) {
 	m := runModel{
 		ID:           "rid",

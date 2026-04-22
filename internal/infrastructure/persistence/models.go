@@ -9,6 +9,11 @@ import (
 // runModel mirrors the `runs` table. Fields are unexported to the
 // package so only the mapper interacts with gorm's reflection
 // pipeline; the rest of the codebase stays on domain aggregates.
+//
+// AddressPlans is a JSONB array of tagged envelopes serialising the
+// Run's []AddressSamplingPlan. Migration 002 introduced the column
+// with a "[]"-literal default, so rows that predate it round-trip
+// to an empty slice on Rehydrate.
 type runModel struct {
 	ID           string         `gorm:"primaryKey;column:id"`
 	ChainID      uint64         `gorm:"column:chain_id;not null"`
@@ -17,6 +22,7 @@ type runModel struct {
 	TriggerData  []byte         `gorm:"column:trigger_data;type:jsonb;not null"`
 	StrategyKind string         `gorm:"column:strategy_kind;not null"`
 	StrategyData []byte         `gorm:"column:strategy_data;type:jsonb;not null"`
+	AddressPlans []byte         `gorm:"column:address_plans;type:jsonb;not null;default:'[]'::jsonb"`
 	Metrics      pq.StringArray `gorm:"column:metrics;type:text[];not null"`
 	ErrorMsg     string         `gorm:"column:error_msg;not null;default:''"`
 	CreatedAt    time.Time      `gorm:"column:created_at;not null"`

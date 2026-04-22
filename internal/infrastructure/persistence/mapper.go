@@ -38,6 +38,10 @@ func toRunModel(r *verification.Run) (runModel, error) {
 	if err != nil {
 		return runModel{}, err
 	}
+	planData, err := marshalAddressPlans(r.AddressPlans())
+	if err != nil {
+		return runModel{}, err
+	}
 
 	keys := make([]string, 0, len(r.Metrics()))
 	for _, m := range r.Metrics() {
@@ -52,6 +56,7 @@ func toRunModel(r *verification.Run) (runModel, error) {
 		TriggerData:  trigData,
 		StrategyKind: r.Strategy().Kind(),
 		StrategyData: stratData,
+		AddressPlans: planData,
 		Metrics:      keys,
 		ErrorMsg:     r.ErrorMessage(),
 		CreatedAt:    r.CreatedAt(),
@@ -66,6 +71,10 @@ func toRun(m runModel) (*verification.Run, error) {
 		return nil, err
 	}
 	strategy, err := unmarshalStrategy(m.StrategyKind, m.StrategyData)
+	if err != nil {
+		return nil, err
+	}
+	plans, err := unmarshalAddressPlans(m.AddressPlans)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +98,7 @@ func toRun(m runModel) (*verification.Run, error) {
 		m.StartedAt,
 		m.FinishedAt,
 		m.ErrorMsg,
+		plans...,
 	)
 }
 
