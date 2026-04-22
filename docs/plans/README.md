@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7.6 + 8.1 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 7 완료 + Phase 8 시작 — HTTP 서버 골격(chi+huma+미들웨어+health+openapi) 배선됨. ExecuteRun 5개 메트릭 클러스터 커버(BlockImmutable/AddressLatest/AddressAtBlock/ERC20 Holdings/ERC20 Balance). 다음은 Phase 8.2~8.5 리소스 라우트.**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7.6 + 8 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 8 HTTP API 완료 — /healthz /readyz /runs /diffs /schedules /sources 5개 리소스 + /openapi.json + `csw openapi-dump` CLI. ExecuteRun 5개 메트릭 클러스터 커버. 다음은 Phase 9 (Next.js 프론트) 또는 Phase 7I.2 (TokenPlans 퍼시스턴스 라운드트립).**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -185,7 +185,7 @@ examples/
 | 8.3 | HTTP API — /diffs 라우트 (GET list/GET detail/POST replay) + /runs/{id}/diffs | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + QuerySchedules 유스케이스 (TokenPlans 라운드트립은 7I.2에서) | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.5 | HTTP API — /sources 라우트 (capability matrix + tier); chain_id 필수 쿼리 파라미터 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
-| 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) | ⬜ Not started | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
+| 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) — `--format=json\|yaml`, `--output=path`, 기본 stdout json | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
 | 11 | Kubernetes 배포 (Helm) | ⬜ Not started | 10 | [phase-11-kubernetes-deploy.md](./phase-11-kubernetes-deploy.md) |

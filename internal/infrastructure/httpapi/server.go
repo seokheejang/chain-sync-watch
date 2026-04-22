@@ -36,8 +36,7 @@ type Config struct {
 
 // Deps bundles the route-registration dependencies. Callers populate
 // only the fields they want to expose — leaving a set nil simply
-// omits that resource's routes. Phase 8.1 shipped Health; Phase 8.2
-// adds Runs. Diffs / Schedules / Sources land in 8.3–8.5.
+// omits that resource's routes.
 type Deps struct {
 	Health    routes.HealthDeps
 	Runs      routes.RunsDeps
@@ -59,7 +58,6 @@ type Deps struct {
 // they want.
 func NewServer(cfg Config, deps Deps) *http.Server {
 	r := chi.NewRouter()
-
 	r.Use(requestIDMiddleware())
 	r.Use(recoverMiddleware(cfg.Logger))
 	r.Use(loggingMiddleware(cfg.Logger))
@@ -73,16 +71,7 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 			MaxAge:           300,
 		}))
 	}
-
-	humaCfg := huma.DefaultConfig("chain-sync-watch", "v1")
-	humaCfg.Info.Description = "Cross-source chain indexer verification API. Runs, discrepancies, schedules, sources."
-	api := humachi.New(r, humaCfg)
-
-	routes.RegisterHealth(api, deps.Health)
-	routes.RegisterRuns(api, deps.Runs)
-	routes.RegisterDiffs(api, deps.Diffs)
-	routes.RegisterSchedules(api, deps.Schedules)
-	routes.RegisterSources(api, deps.Sources)
+	mountAPI(r, deps)
 
 	return &http.Server{
 		Addr:              cfg.Addr,
@@ -91,4 +80,28 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      cfg.WriteTimeout,
 	}
+}
+
+// humaConfig returns the OpenAPI 3.1 metadata shared by the live
+// server and the openapi-dump command. Keeping it in one place
+// means any future change (title / description / security schemes)
+// ripples into both paths at once.
+func humaConfig() huma.Config {
+	cfg := huma.DefaultConfig("chain-sync-watch", "v1")
+	cfg.Info.Description = "Cross-source chain indexer verification API. Runs, discrepancies, schedules, sources."
+	return cfg
+}
+
+// mountAPI registers every resource route onto the given chi mux
+// and returns the huma.API bound to it. The chi.Router argument is
+// an interface so callers can pass either a *chi.Mux (live server)
+// or any other chi-compatible router.
+func mountAPI(r chi.Router, deps Deps) huma.API {
+	api := humachi.New(r, humaConfig())
+	routes.RegisterHealth(api, deps.Health)
+	routes.RegisterRuns(api, deps.Runs)
+	routes.RegisterDiffs(api, deps.Diffs)
+	routes.RegisterSchedules(api, deps.Schedules)
+	routes.RegisterSources(api, deps.Sources)
+	return api
 }
