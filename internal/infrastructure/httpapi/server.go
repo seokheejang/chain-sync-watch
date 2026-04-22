@@ -41,6 +41,7 @@ type Config struct {
 type Deps struct {
 	Health routes.HealthDeps
 	Runs   routes.RunsDeps
+	Diffs  routes.DiffsDeps
 }
 
 // NewServer constructs a ready-to-Serve *http.Server. The server
@@ -77,6 +78,7 @@ func NewServer(cfg Config, deps Deps) *http.Server {
 
 	routes.RegisterHealth(api, deps.Health)
 	routes.RegisterRuns(api, deps.Runs)
+	routes.RegisterDiffs(api, deps.Diffs)
 
 	return &http.Server{
 		Addr:              cfg.Addr,
