@@ -39,6 +39,10 @@ func MapError(err error) error {
 		return huma.Error400BadRequest(err.Error())
 	case errors.Is(err, application.ErrBudgetExhausted):
 		return huma.Error429TooManyRequests(err.Error())
+	case errors.Is(err, application.ErrSourceNotFound):
+		return huma.Error404NotFound(err.Error())
+	case errors.Is(err, application.ErrDuplicateSource):
+		return huma.Error409Conflict(err.Error())
 	default:
 		return huma.Error500InternalServerError(err.Error())
 	}

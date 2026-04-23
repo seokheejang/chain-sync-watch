@@ -34,9 +34,11 @@ import (
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/gateway"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/stubs"
+	"github.com/seokheejang/chain-sync-watch/internal/secrets"
 )
 
 func main() {
@@ -80,6 +82,21 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	runs := persistence.NewRunRepo(db)
 	diffs := persistence.NewDiffRepo(db)
 	schedules := persistence.NewScheduleRepo(db)
+	sourcesRepo := persistence.NewSourceRepo(db)
+
+	// Worker reads sources + chain head from the DB (Phase 10a). A
+	// missing CSW_SECRET_KEY is only fatal when a source carries an
+	// encrypted credential — lazy-load keeps credential-free dev
+	// environments usable.
+	var cipher *secrets.Cipher
+	if os.Getenv(secrets.EnvKeyName) != "" {
+		cipher, err = secrets.Load()
+		if err != nil {
+			return fmt.Errorf("load secret key: %w", err)
+		}
+	} else {
+		logger.Warn("CSW_SECRET_KEY not set; runs against credentialed sources will fail")
+	}
 
 	clock := stubs.SystemClock{}
 	dispatcher := queue.NewDispatcher(redisOpt, schedules)
@@ -88,8 +105,8 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	exec := &application.ExecuteRun{
 		Runs:      runs,
 		Diffs:     diffs,
-		Sources:   stubs.NullGateway{},
-		ChainHead: stubs.NullChainHead{},
+		Sources:   gateway.NewDBGateway(sourcesRepo, cipher, nil),
+		ChainHead: gateway.NewRPCChainHead(sourcesRepo),
 		Clock:     clock,
 		Policy:    diff.DefaultPolicy{},
 	}

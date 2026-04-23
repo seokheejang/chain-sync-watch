@@ -107,6 +107,10 @@ migrate-down: ## Roll back last DB migration
 migrate-status: ## Show migration status
 	$(GO) run ./cmd/csw migrate status
 
+.PHONY: seed
+seed: ## Seed sources table from defaults.yaml (one-shot; fails if already populated)
+	$(GO) run ./cmd/csw migrate seed
+
 # -------------------- OpenAPI --------------------
 
 .PHONY: openapi

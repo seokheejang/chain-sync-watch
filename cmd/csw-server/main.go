@@ -5,14 +5,11 @@
 // liveness (/healthz) and a readiness (/readyz) probe ship alongside
 // so Kubernetes rollouts can gate traffic.
 //
-// Scope note: SourceGateway and ChainHead are stub implementations
-// today (stubs.NullGateway / stubs.NullChainHead). That keeps the
-// HTTP surface fully wired — every route registers and responds —
-// while adapter wiring lands in Phase 10. ReplayDiff against a real
-// discrepancy will surface "chain head not configured" through the
-// normal error path; listing / fetching persisted records works as
-// intended. The /sources endpoint returns an empty capability list
-// until real sources are injected.
+// SourceGateway is DB-backed (gateway.DBGateway over the sources
+// table; Phase 10a). A fresh database requires `csw migrate seed`
+// to populate adapter rows from the embedded defaults.yaml, after
+// which the table is the single source of truth and the admin UI
+// takes over via /sources CRUD.
 //
 // Environment:
 //
@@ -41,11 +38,13 @@ import (
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/gateway"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/routes"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/stubs"
+	"github.com/seokheejang/chain-sync-watch/internal/secrets"
 )
 
 func main() {
@@ -85,7 +84,20 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer func() { _ = persistence.Close(db) }()
 
-	deps := buildDeps(db, redisOpt)
+	// Optional master key — loaded when set so adapter CRUD can
+	// encrypt / decrypt api_keys. A deployment with zero
+	// credential-requiring sources can run without it.
+	var cipher *secrets.Cipher
+	if os.Getenv(secrets.EnvKeyName) != "" {
+		cipher, err = secrets.Load()
+		if err != nil {
+			return fmt.Errorf("load secret key: %w", err)
+		}
+	} else {
+		logger.Warn("CSW_SECRET_KEY not set; source CRUD with api_keys will be rejected")
+	}
+
+	deps := buildDeps(db, redisOpt, cipher)
 
 	addr := envOrDefault("CSW_SERVER_ADDR", ":8080")
 	corsOrigins := splitNonEmpty(os.Getenv("CSW_SERVER_CORS_ORIGINS"))
@@ -122,26 +134,26 @@ func run(ctx context.Context, logger *slog.Logger) error {
 }
 
 // buildDeps assembles the full httpapi.Deps tree: repositories from
-// the Postgres handle, a dispatcher on the Redis handle, and the
-// application use cases that bind them. SourceGateway / ChainHead
-// are stubs; ReplayDiff still registers so the route map is complete
-// — operators see the "chain head not configured" signal rather
-// than a 404.
-func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt) httpapi.Deps {
+// the Postgres handle, a dispatcher on the Redis handle, a DB-backed
+// SourceGateway + RPC ChainHead, and the application use cases
+// that bind them. Phase 10a completes the stubs → real-infra
+// transition started in Phase 10a.1–10a.7.
+func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher) httpapi.Deps {
 	runs := persistence.NewRunRepo(db)
 	diffs := persistence.NewDiffRepo(db)
 	schedules := persistence.NewScheduleRepo(db)
+	sourcesRepo := persistence.NewSourceRepo(db)
 
 	clock := stubs.SystemClock{}
 	dispatcher := queue.NewDispatcher(redisOpt, schedules)
-	gateway := stubs.NullGateway{}
+	dbGateway := gateway.NewDBGateway(sourcesRepo, cipher, nil)
 	policy := diff.DefaultPolicy{}
 
 	schedule := &application.ScheduleRun{Runs: runs, Dispatcher: dispatcher, Clock: clock}
 	cancel := &application.CancelRun{Runs: runs, Clock: clock}
 	replay := &application.ReplayDiff{
 		Diffs:     diffs,
-		Sources:   gateway,
+		Sources:   dbGateway,
 		Clock:     clock,
 		Policy:    policy,
 		Tolerance: application.DefaultToleranceResolver{},
@@ -165,7 +177,12 @@ func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt) httpapi.Deps {
 			Query:      application.QuerySchedules{Schedules: schedules},
 			Dispatcher: dispatcher,
 		},
-		Sources: routes.SourcesDeps{Gateway: gateway},
+		Sources: routes.SourcesDeps{
+			Repo:    sourcesRepo,
+			Gateway: dbGateway,
+			Cipher:  cipher,
+			Clock:   clock,
+		},
 	}
 }
 

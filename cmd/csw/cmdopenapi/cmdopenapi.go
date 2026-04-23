@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/routes"
@@ -93,6 +94,7 @@ func specDeps() httpapi.Deps {
 	runs := noopRunRepo{}
 	diffs := noopDiffRepo{}
 	schedules := noopScheduleRepo{}
+	sources := noopSourceRepo{}
 	dispatcher := noopDispatcher{}
 
 	schedule := &application.ScheduleRun{Runs: runs, Dispatcher: dispatcher, Clock: clock}
@@ -120,7 +122,11 @@ func specDeps() httpapi.Deps {
 			Query:      application.QuerySchedules{Schedules: schedules},
 			Dispatcher: dispatcher,
 		},
-		Sources: routes.SourcesDeps{Gateway: gateway},
+		Sources: routes.SourcesDeps{
+			Repo:    sources,
+			Gateway: gateway,
+			Clock:   clock,
+		},
 	}
 }
 
@@ -170,6 +176,18 @@ type noopScheduleRepo struct{}
 func (noopScheduleRepo) Save(context.Context, application.ScheduleRecord) error { return errNoop }
 func (noopScheduleRepo) Deactivate(context.Context, application.JobID) error    { return errNoop }
 func (noopScheduleRepo) ListActive(context.Context) ([]application.ScheduleRecord, error) {
+	return nil, errNoop
+}
+
+type noopSourceRepo struct{}
+
+func (noopSourceRepo) Save(context.Context, application.SourceConfig) error { return errNoop }
+func (noopSourceRepo) Delete(context.Context, string) error                 { return errNoop }
+func (noopSourceRepo) FindByID(context.Context, string) (*application.SourceConfig, error) {
+	return nil, errNoop
+}
+
+func (noopSourceRepo) ListByChain(context.Context, chain.ChainID, bool) ([]application.SourceConfig, error) {
 	return nil, errNoop
 }
 
