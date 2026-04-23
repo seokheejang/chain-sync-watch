@@ -151,6 +151,22 @@ up: ## Start local infra (postgres, redis)
 down: ## Stop local infra
 	$(COMPOSE) down
 
+.PHONY: stack-up
+stack-up: ## Full stack via compose (postgres + redis + server + worker + web)
+	$(COMPOSE) --profile app up -d --build
+
+.PHONY: stack-down
+stack-down: ## Stop the full stack
+	$(COMPOSE) --profile app --profile auth --profile tools down
+
+.PHONY: stack-logs
+stack-logs: ## Tail logs for the full stack
+	$(COMPOSE) --profile app logs -f
+
+.PHONY: stack-auth
+stack-auth: ## Full stack with caddy basic-auth reverse proxy in front
+	$(COMPOSE) --profile app --profile auth up -d --build
+
 .PHONY: logs
 logs: ## Tail docker compose logs
 	$(COMPOSE) logs -f

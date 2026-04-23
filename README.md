@@ -61,14 +61,60 @@ implementation plan and architectural decisions.
 **Prereqs**: Go 1.24+, Docker, Make.
 
 ```bash
-cp .env.example .env              # fill in if you want Etherscan etc.
+cp .env.example .env              # edit: paste CSW_SECRET_KEY, any RPC overrides
 make up                           # postgres + redis via docker compose
-make test                         # unit tests
+make migrate                      # apply schema
+make seed                         # seed sources from defaults.yaml (one-shot)
+make run-server                   # csw-server on :8080
+make run-worker                   # csw-worker (separate shell)
+make web-dev                      # frontend on :3000 (separate shell)
 ```
 
-Phase 0 (foundations) is the minimum set of files currently present.
-Running `make run-server` works once Phase 8 (HTTP API) lands; see the
-plan docs for progress.
+Generate the AES-GCM master key once before `make seed`:
+
+```bash
+echo "CSW_SECRET_KEY=$(openssl rand -base64 32)" >> .env
+```
+
+## Full stack via Docker Compose
+
+Everything (server + worker + web + postgres + redis) in one command:
+
+```bash
+make stack-up                     # builds images, starts the whole stack
+# → web on http://localhost:3000, API on :8080
+make stack-logs                   # tail all services
+make stack-down                   # stop and remove containers
+```
+
+The `app` profile pins the build so a fresh clone is one command from
+a running dashboard. `make stack-auth` layers a Caddy reverse proxy
+with HTTP basic auth in front — aimed at team-shared deployments
+where LAN access isn't enough. Generate the credential hash with:
+
+```bash
+docker run --rm caddy:2.8-alpine caddy hash-password -p 'your-password'
+# paste into .env as CSW_AUTH_HASH + CSW_AUTH_USER
+```
+
+## Security checklist
+
+* **`CSW_SECRET_KEY`** is the AES-GCM master for every 3rd-party
+  credential in the DB. Rotating it requires re-encrypting every
+  `sources` row; losing it makes stored secrets unrecoverable. Store
+  the value in a secrets manager for any non-local deployment.
+* **Never commit `.env`.** Git already ignores it; the one-shot
+  `.env.example` is the template.
+* The Go HTTP API has **no authentication** on its own. Phase 10b's
+  reverse-proxy profile (`make stack-auth`) is the MVP answer for
+  team-shared deployments; Phase 10c (OIDC / oauth2-proxy) is
+  tracked in the plan docs.
+* `/sources` returns `has_secret: bool` — **never the ciphertext**.
+  Inspect the database directly if you need to audit the encrypted
+  payload.
+* Database dumps are safe (ciphertext only), but pair them with the
+  master key in a restore runbook — losing either half corrupts
+  recovery.
 
 ## Project status
 

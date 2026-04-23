@@ -134,6 +134,87 @@ export function useSources(chainId: number) {
   });
 }
 
+export function useSource(id: string) {
+  return useQuery({
+    queryKey: ["source", id],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/sources/{id}", {
+        params: { path: { id } },
+        signal,
+      });
+      if (error) throw new Error("get source failed");
+      return data;
+    },
+    enabled: !!id,
+  });
+}
+
+// useSourceCapabilities materialises the source and reports its
+// capability matrix. Split from useSource because it depends on
+// runtime adapter instantiation; listing rows for the CRUD table
+// doesn't need it.
+export function useSourceCapabilities(id: string) {
+  return useQuery({
+    queryKey: ["source-capabilities", id],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/sources/{id}/capabilities", {
+        params: { path: { id } },
+        signal,
+      });
+      if (error) throw new Error("get source capabilities failed");
+      return data;
+    },
+    enabled: !!id,
+  });
+}
+
+export function useCreateSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Schemas["CreateSourceRequest"]) => {
+      const { data, error } = await api.POST("/sources", { body });
+      if (error) throw new Error("create source failed");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sources"] });
+    },
+  });
+}
+
+export function useUpdateSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: Schemas["UpdateSourceRequest"] }) => {
+      const { data, error } = await api.PUT("/sources/{id}", {
+        params: { path: { id } },
+        body,
+      });
+      if (error) throw new Error("update source failed");
+      return data;
+    },
+    onSuccess: (_, { id }) => {
+      qc.invalidateQueries({ queryKey: ["sources"] });
+      qc.invalidateQueries({ queryKey: ["source", id] });
+    },
+  });
+}
+
+export function useDeleteSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await api.DELETE("/sources/{id}", {
+        params: { path: { id } },
+      });
+      if (error) throw new Error("delete source failed");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sources"] });
+    },
+  });
+}
+
 // Server readiness — dashboard uses this for a "backend reachable"
 // indicator. Intentionally short staleTime so operators get fast
 // feedback when the API goes down.

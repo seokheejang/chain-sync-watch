@@ -1,0 +1,57 @@
+# Caddyfile — reverse proxy + HTTP basic auth for team-shared
+# chain-sync-watch deployments (Phase 10b, auth Option A).
+#
+# Terminates on :80 inside the container; docker-compose publishes
+# it on ${CSW_PROXY_PORT:-8000} externally. In production, front
+# this with a TLS-terminating load balancer (ALB / Cloudflare /
+# Traefik) or flip Caddy to tls mode with `{$CSW_DOMAIN}` + an ACME
+# email so Let's Encrypt takes over.
+#
+# Routes:
+#   /api/*  → csw-server (:8080) with /api stripped
+#   /*      → web         (:3000) everything else (SSR dashboard)
+#
+# Every request passes through basicauth. Credentials come from
+# CSW_AUTH_USER + CSW_AUTH_HASH (bcrypt) in the shell env that
+# launched compose. Rotating: update the env, `docker compose up
+# -d --force-recreate caddy`.
+
+{
+	# Admin API off — containerized deployments don't need it and
+	# leaving it on exposes /config and /adapted which are writeable.
+	admin off
+	# Keep auto-HTTPS disabled; the outer load balancer handles TLS.
+	auto_https off
+}
+
+:80 {
+	log {
+		output stdout
+		format json
+	}
+
+	# Unauthenticated health endpoint for compose / Kubernetes
+	# liveness probes. Proxies to csw-server's /healthz so a broken
+	# upstream trips the probe instead of Caddy reporting itself
+	# healthy in isolation.
+	handle /healthz {
+		reverse_proxy csw-server:8080
+	}
+
+	# Everything else is behind basic auth.
+	basic_auth {
+		{$CSW_AUTH_USER} {$CSW_AUTH_HASH}
+	}
+
+	# Strip the /api prefix before forwarding so csw-server routes
+	# (which mount at /runs, /diffs, /sources, …) don't care about
+	# the proxy layout.
+	handle_path /api/* {
+		reverse_proxy csw-server:8080
+	}
+
+	# Everything not matched above goes to the Next.js app.
+	handle {
+		reverse_proxy web:3000
+	}
+}

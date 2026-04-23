@@ -206,8 +206,45 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List configured adapters for a chain with their capability + tier matrix */
+        /** List configured source adapter rows for a chain */
         get: operations["list-sources"];
+        put?: never;
+        /** Create a new source configuration */
+        post: operations["create-source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a source configuration by id */
+        get: operations["get-source"];
+        /** Update a source configuration */
+        put: operations["update-source"];
+        post?: never;
+        /** Delete a source configuration */
+        delete: operations["delete-source"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sources/{id}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect a source's capability matrix at runtime */
+        get: operations["get-source-capabilities"];
         put?: never;
         post?: never;
         delete?: never;
@@ -295,6 +332,32 @@ export interface components {
             job_id: string;
             /** @description First Run the schedule materialised; absent for deferred modes */
             run_id: string;
+        };
+        CreateSourceRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateSourceRequest.json
+             */
+            readonly $schema?: string;
+            /** @description Plaintext secret; server encrypts with CSW_SECRET_KEY before persisting. Empty = no credential. */
+            api_key?: string;
+            /**
+             * Format: int64
+             * @example 10
+             */
+            chain_id: number;
+            /** @description Defaults to true when omitted */
+            enabled?: boolean;
+            endpoint: string;
+            options?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description Adapter type
+             * @enum {string}
+             */
+            type: "rpc" | "blockscout" | "routescan";
         };
         DiffView: {
             /**
@@ -462,7 +525,7 @@ export interface components {
              * @example https://example.com/schemas/ListSourcesResponse.json
              */
             readonly $schema?: string;
-            items: components["schemas"]["SourceView"][] | null;
+            items: components["schemas"]["SourceConfigView"][] | null;
             /** Format: int64 */
             total: number;
         };
@@ -570,11 +633,43 @@ export interface components {
             timezone?: string;
             token_plan_kinds?: string[] | null;
         };
-        SourceView: {
+        SourceCapabilityMatrix: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SourceCapabilityMatrix.json
+             */
+            readonly $schema?: string;
             capabilities: components["schemas"]["CapabilityView"][] | null;
             /** Format: int64 */
             chain_id: number;
             id: string;
+        };
+        SourceConfigView: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SourceConfigView.json
+             */
+            readonly $schema?: string;
+            /** Format: int64 */
+            chain_id: number;
+            /** Format: date-time */
+            created_at: string;
+            enabled: boolean;
+            endpoint: string;
+            has_secret: boolean;
+            id: string;
+            options: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description Adapter type
+             * @enum {string}
+             */
+            type: "rpc" | "blockscout" | "routescan";
+            /** Format: date-time */
+            updated_at: string;
         };
         SparseStepsIn: {
             /**
@@ -617,6 +712,22 @@ export interface components {
             realtime_block?: number;
             /** @description Operator identifier for manual triggers */
             user?: string;
+        };
+        UpdateSourceRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UpdateSourceRequest.json
+             */
+            readonly $schema?: string;
+            /** @description Nil keeps existing secret; empty string still keeps; set ClearSecret=true to remove. */
+            api_key?: string;
+            clear_secret?: boolean;
+            enabled?: boolean;
+            endpoint?: string;
+            options?: {
+                [key: string]: unknown;
+            };
         };
         ValueSnapshotView: {
             /** Format: date-time */
@@ -1069,6 +1180,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListSourcesResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "create-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceConfigView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceConfigView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "update-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceConfigView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "delete-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "get-source-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceCapabilityMatrix"];
                 };
             };
             /** @description Error */

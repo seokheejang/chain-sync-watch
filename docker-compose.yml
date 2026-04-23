@@ -1,3 +1,22 @@
+# docker-compose.yml — integrated chain-sync-watch stack.
+#
+# Profiles:
+#
+#   * default (no profile)    — postgres + redis.
+#                               `make up` / `docker compose up -d`
+#   * profile `app`           — adds migrate (one-shot), csw-server,
+#                               csw-worker, web.
+#                               `docker compose --profile app up -d`
+#   * profile `tools`         — adds asynqmon.
+#   * profile `auth`          — adds caddy reverse proxy with basic
+#                               auth in front of web + /api -> server.
+#                               Compose with the `app` profile for
+#                               team-shared deployments.
+#
+# Secrets: DATABASE_URL / REDIS_URL / CSW_SECRET_KEY come from .env.
+# The two app services also pick up CSW_*__* env overrides (e.g.
+# CSW_ADAPTERS__RPC__ENDPOINTS__10 for a private RPC URL).
+
 services:
   postgres:
     image: postgres:17
@@ -32,6 +51,95 @@ services:
       timeout: 3s
       retries: 10
 
+  # migrate carries the only `build:` block for the shared
+  # csw:latest image; csw-server / csw-worker reference the built
+  # image by tag. Docker builds once instead of racing three
+  # concurrent manifests of the same target.
+  # Migrate runs `csw migrate up` and exits. csw-server + csw-worker
+  # gate on its successful completion so their first boot sees the
+  # full schema.
+  migrate:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: csw:latest
+    container_name: csw-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-csw}:${POSTGRES_PASSWORD:-csw}@postgres:5432/${POSTGRES_DB:-csw}?sslmode=disable
+    command: ["csw", "migrate", "up"]
+    restart: "no"
+
+  csw-server:
+    profiles: [app]
+    image: csw:latest
+    container_name: csw-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-csw}:${POSTGRES_PASSWORD:-csw}@postgres:5432/${POSTGRES_DB:-csw}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      CSW_SERVER_ADDR: ":8080"
+      CSW_SERVER_CORS_ORIGINS: ${CSW_SERVER_CORS_ORIGINS:-http://localhost:3000}
+      CSW_SECRET_KEY: ${CSW_SECRET_KEY:-}
+      CSW_ADAPTERS__RPC__ENDPOINTS__10: ${CSW_ADAPTERS__RPC__ENDPOINTS__10:-}
+      CSW_ADAPTERS__RPC__ARCHIVE: ${CSW_ADAPTERS__RPC__ARCHIVE:-false}
+    ports:
+      - "${CSW_SERVER_PORT:-8080}:8080"
+    command: ["csw-server"]
+
+  csw-worker:
+    profiles: [app]
+    image: csw:latest
+    container_name: csw-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-csw}:${POSTGRES_PASSWORD:-csw}@postgres:5432/${POSTGRES_DB:-csw}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      CSW_WORKER_HEALTH_ADDR: ":8082"
+      CSW_WORKER_CONCURRENCY: ${CSW_WORKER_CONCURRENCY:-10}
+      CSW_SECRET_KEY: ${CSW_SECRET_KEY:-}
+      CSW_ADAPTERS__RPC__ENDPOINTS__10: ${CSW_ADAPTERS__RPC__ENDPOINTS__10:-}
+      CSW_ADAPTERS__RPC__ARCHIVE: ${CSW_ADAPTERS__RPC__ARCHIVE:-false}
+    ports:
+      - "${CSW_WORKER_HEALTH_PORT:-8082}:8082"
+    command: ["csw-worker"]
+
+  web:
+    profiles: [app]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Bake the API base URL into the bundle. Leave empty for a
+        # proxied deployment where the frontend hits relative paths
+        # rewritten by caddy/nginx to the server upstream.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+    image: csw-web:latest
+    container_name: csw-web
+    restart: unless-stopped
+    depends_on:
+      csw-server:
+        condition: service_started
+    ports:
+      - "${CSW_WEB_PORT:-3000}:3000"
+
   # Enable via: docker compose --profile tools up -d
   asynqmon:
     image: hibiken/asynqmon:latest
@@ -45,6 +153,32 @@ services:
     ports:
       - "${ASYNQMON_PORT:-8081}:8080"
 
+  # Reverse-proxy with basic auth for team-shared deployments.
+  # Enable with `docker compose --profile app --profile auth up -d`.
+  # Credentials live in the bcrypt hash CSW_AUTH_BASIC — generate
+  # with:  caddy hash-password -p 'your-password'
+  # Details in docs/plans/phase-10-integration-observability.md.
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: csw-caddy
+    profiles: [auth]
+    depends_on:
+      web:
+        condition: service_started
+      csw-server:
+        condition: service_started
+    environment:
+      CSW_AUTH_USER: ${CSW_AUTH_USER:-admin}
+      CSW_AUTH_HASH: ${CSW_AUTH_HASH:-}
+    ports:
+      - "${CSW_PROXY_PORT:-8000}:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
   redisdata:
+  caddy_data:
+  caddy_config:
