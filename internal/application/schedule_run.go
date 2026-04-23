@@ -13,8 +13,9 @@ import (
 // ID is optional — an empty value asks the use case to generate a
 // fresh RunID. Schedule is required only when Trigger is a
 // ScheduledTrigger; it is ignored for ManualTrigger and
-// RealtimeTrigger. AddressPlans is optional — zero plans disables
-// the AddressLatest stratum for the resulting Run.
+// RealtimeTrigger. AddressPlans / TokenPlans are optional — zero
+// plans disables the AddressLatest / AddressAtBlock / ERC-20
+// passes for the resulting Run.
 type ScheduleRunInput struct {
 	ID           verification.RunID
 	ChainID      chain.ChainID
@@ -23,6 +24,7 @@ type ScheduleRunInput struct {
 	Trigger      verification.Trigger
 	Schedule     verification.Schedule
 	AddressPlans []verification.AddressSamplingPlan
+	TokenPlans   []verification.TokenSamplingPlan
 }
 
 // ScheduleRunResult is the successful return of ScheduleRun.
@@ -80,6 +82,11 @@ func (uc ScheduleRun) Execute(ctx context.Context, in ScheduleRunInput) (Schedul
 	if err != nil {
 		return ScheduleRunResult{}, fmt.Errorf("%w: %w", ErrInvalidRun, err)
 	}
+	if len(in.TokenPlans) > 0 {
+		if err := r.SetTokenPlans(in.TokenPlans...); err != nil {
+			return ScheduleRunResult{}, fmt.Errorf("%w: %w", ErrInvalidRun, err)
+		}
+	}
 
 	if err := uc.Runs.Save(ctx, r); err != nil {
 		return ScheduleRunResult{}, fmt.Errorf("schedule run: save: %w", err)
@@ -98,6 +105,7 @@ func (uc ScheduleRun) Execute(ctx context.Context, in ScheduleRunInput) (Schedul
 			Metrics:      in.Metrics,
 			Strategy:     in.Strategy,
 			AddressPlans: in.AddressPlans,
+			TokenPlans:   in.TokenPlans,
 		})
 		if err != nil {
 			return ScheduleRunResult{}, fmt.Errorf("schedule run: schedule: %w", err)

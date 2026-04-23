@@ -18,6 +18,11 @@ import (
 // zero chain id, nil strategy, empty metrics, nil trigger. Those
 // are schema-level invariants the database must uphold.
 //
+// addressPlans / tokenPlans are passed as explicit slices because
+// the Run now carries two kinds of sampling plans. nil / empty is
+// legal for either — a Run with no address coverage and no token
+// coverage runs only the BlockImmutable pass.
+//
 // Callers outside of repository mappers should not use Rehydrate —
 // its purpose is to support the DDD boundary between the domain
 // aggregate and its storage representation.
@@ -32,7 +37,8 @@ func Rehydrate(
 	startedAt *time.Time,
 	finishedAt *time.Time,
 	errorMsg string,
-	addressPlans ...AddressSamplingPlan,
+	addressPlans []AddressSamplingPlan,
+	tokenPlans []TokenSamplingPlan,
 ) (*Run, error) {
 	if id == "" {
 		return nil, errors.New("rehydrate run: id is empty")
@@ -56,10 +62,16 @@ func Rehydrate(
 	m := make([]Metric, len(metrics))
 	copy(m, metrics)
 
-	var plans []AddressSamplingPlan
+	var aplans []AddressSamplingPlan
 	if len(addressPlans) > 0 {
-		plans = make([]AddressSamplingPlan, len(addressPlans))
-		copy(plans, addressPlans)
+		aplans = make([]AddressSamplingPlan, len(addressPlans))
+		copy(aplans, addressPlans)
+	}
+
+	var tplans []TokenSamplingPlan
+	if len(tokenPlans) > 0 {
+		tplans = make([]TokenSamplingPlan, len(tokenPlans))
+		copy(tplans, tokenPlans)
 	}
 
 	var startedCopy, finishedCopy *time.Time
@@ -76,7 +88,8 @@ func Rehydrate(
 		id:           id,
 		chainID:      cid,
 		strategy:     strategy,
-		addressPlans: plans,
+		addressPlans: aplans,
+		tokenPlans:   tplans,
 		metrics:      m,
 		trigger:      trigger,
 		status:       status,

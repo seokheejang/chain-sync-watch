@@ -122,6 +122,10 @@ func scheduleRequestToUseCase(r dto.CreateScheduleRequest) (application.Schedule
 	if err != nil {
 		return application.ScheduleRunInput{}, err
 	}
+	tokens, err := dto.ResolveTokenPlans(r.TokenPlans)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
+	}
 	return application.ScheduleRunInput{
 		ChainID:      chain.ChainID(r.ChainID),
 		Strategy:     strategy,
@@ -129,6 +133,7 @@ func scheduleRequestToUseCase(r dto.CreateScheduleRequest) (application.Schedule
 		Trigger:      verification.ScheduledTrigger{CronExpr: sched.CronExpr()},
 		Schedule:     sched,
 		AddressPlans: plans,
+		TokenPlans:   tokens,
 	}, nil
 }
 

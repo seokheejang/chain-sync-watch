@@ -237,6 +237,84 @@ func TestRunRoundTrip_AddressPlans_NullTolerated(t *testing.T) {
 	require.Nil(t, got.AddressPlans())
 }
 
+func TestRunRoundTrip_TokenPlans_Known(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	usdc := chain.MustAddress("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85")
+	weth := chain.MustAddress("0x4200000000000000000000000000000000000006")
+	addrPlans := []verification.AddressSamplingPlan{
+		verification.KnownAddresses{Addresses: []chain.Address{
+			chain.MustAddress("0x0000000000000000000000000000000000000001"),
+		}},
+	}
+	r, err := verification.NewRun(
+		"rid-tokens",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricERC20BalanceLatest},
+		verification.ManualTrigger{User: "u"},
+		now,
+		addrPlans...,
+	)
+	require.NoError(t, err)
+	require.NoError(t, r.SetTokenPlans(verification.KnownTokens{Tokens: []chain.Address{usdc, weth}}))
+
+	m, err := toRunModel(r)
+	require.NoError(t, err)
+	require.NotEqual(t, "[]", string(m.TokenPlans))
+
+	got, err := toRun(m)
+	require.NoError(t, err)
+
+	gotPlans := got.TokenPlans()
+	require.Len(t, gotPlans, 1)
+	k, ok := gotPlans[0].(verification.KnownTokens)
+	require.True(t, ok)
+	require.Equal(t, []chain.Address{usdc, weth}, k.Tokens)
+}
+
+func TestRunRoundTrip_NoTokenPlans_EmptyArray(t *testing.T) {
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	r, err := verification.NewRun(
+		"rid-no-tokens",
+		chain.OptimismMainnet,
+		verification.LatestN{N: 1},
+		[]verification.Metric{verification.MetricBlockHash},
+		verification.ManualTrigger{User: "u"},
+		now,
+	)
+	require.NoError(t, err)
+
+	m, err := toRunModel(r)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(m.TokenPlans))
+
+	got, err := toRun(m)
+	require.NoError(t, err)
+	require.Nil(t, got.TokenPlans())
+}
+
+func TestRunRoundTrip_TokenPlans_NullTolerated(t *testing.T) {
+	// Rows written before migration 005 may arrive with NULL / nil
+	// bytes in token_plans; toRun must treat that the same as an
+	// empty list so older rows stay rehydrateable.
+	m := runModel{
+		ID:           "rid",
+		ChainID:      10,
+		Status:       "pending",
+		TriggerType:  "manual",
+		TriggerData:  []byte(`{"user":"u"}`),
+		StrategyKind: "latest_n",
+		StrategyData: []byte(`{"n":1}`),
+		AddressPlans: []byte("[]"),
+		TokenPlans:   nil,
+		Metrics:      []string{verification.MetricBlockHash.Key},
+		CreatedAt:    time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC),
+	}
+	got, err := toRun(m)
+	require.NoError(t, err)
+	require.Nil(t, got.TokenPlans())
+}
+
 func TestRunRoundTrip_RejectsUnknownMetricKey(t *testing.T) {
 	m := runModel{
 		ID:           "rid",
@@ -373,6 +451,55 @@ func TestScheduleRoundTrip_NoPlansEmptyArray(t *testing.T) {
 	got, err := toScheduleRecord(m)
 	require.NoError(t, err)
 	require.Nil(t, got.AddressPlans)
+}
+
+func TestScheduleRoundTrip_TokenPlans(t *testing.T) {
+	schedule, err := verification.NewSchedule("* * * * *", "UTC")
+	require.NoError(t, err)
+	usdc := chain.MustAddress("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85")
+	weth := chain.MustAddress("0x4200000000000000000000000000000000000006")
+	orig := application.ScheduleRecord{
+		JobID:      "job-token-plans",
+		ChainID:    chain.OptimismMainnet,
+		Schedule:   schedule,
+		Strategy:   verification.LatestN{N: 3},
+		Metrics:    []verification.Metric{verification.MetricERC20BalanceLatest},
+		TokenPlans: []verification.TokenSamplingPlan{verification.KnownTokens{Tokens: []chain.Address{usdc, weth}}},
+		CreatedAt:  time.Now().UTC(),
+		Active:     true,
+	}
+
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.NotEqual(t, "[]", string(m.TokenPlans))
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.Len(t, got.TokenPlans, 1)
+	k, ok := got.TokenPlans[0].(verification.KnownTokens)
+	require.True(t, ok)
+	require.Equal(t, []chain.Address{usdc, weth}, k.Tokens)
+}
+
+func TestScheduleRoundTrip_NoTokenPlansEmptyArray(t *testing.T) {
+	schedule, err := verification.NewSchedule("* * * * *", "UTC")
+	require.NoError(t, err)
+	orig := application.ScheduleRecord{
+		JobID:     "job-no-tokens",
+		ChainID:   chain.OptimismMainnet,
+		Schedule:  schedule,
+		Strategy:  verification.LatestN{N: 1},
+		Metrics:   []verification.Metric{verification.MetricBlockHash},
+		CreatedAt: time.Now().UTC(),
+		Active:    true,
+	}
+	m, err := toScheduleModel(orig)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(m.TokenPlans))
+
+	got, err := toScheduleRecord(m)
+	require.NoError(t, err)
+	require.Nil(t, got.TokenPlans)
 }
 
 func TestScheduleRoundTrip_RejectsUnknownStrategyKind(t *testing.T) {

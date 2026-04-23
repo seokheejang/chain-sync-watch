@@ -148,6 +148,7 @@ func (d *Dispatcher) ScheduleRecurring(
 		Strategy:     payload.Strategy,
 		Metrics:      payload.Metrics,
 		AddressPlans: payload.AddressPlans,
+		TokenPlans:   payload.TokenPlans,
 		CreatedAt:    d.clock(),
 		Active:       true,
 	}
@@ -229,16 +230,20 @@ func (p *dbConfigProvider) GetConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 // Task the PeriodicTaskManager will enqueue on every fire. The
 // output lives inside asynq's Redis representation so the payload
 // format must round-trip through the same serialise helpers the
-// runs table uses — callers decode with persistence.UnmarshalStrategy
-// and persistence.UnmarshalAddressPlans.
+// runs table uses — callers decode with persistence.UnmarshalStrategy,
+// persistence.UnmarshalAddressPlans, and persistence.UnmarshalTokenPlans.
 func buildScheduledRunTask(r application.ScheduleRecord, opts EnqueueOptions) (*asynq.Task, error) {
 	stratData, err := persistence.MarshalStrategy(r.Strategy)
 	if err != nil {
 		return nil, fmt.Errorf("queue: build scheduled_run strategy: %w", err)
 	}
-	planData, err := persistence.MarshalAddressPlans(r.AddressPlans)
+	addressPlanData, err := persistence.MarshalAddressPlans(r.AddressPlans)
 	if err != nil {
-		return nil, fmt.Errorf("queue: build scheduled_run plans: %w", err)
+		return nil, fmt.Errorf("queue: build scheduled_run address plans: %w", err)
+	}
+	tokenPlanData, err := persistence.MarshalTokenPlans(r.TokenPlans)
+	if err != nil {
+		return nil, fmt.Errorf("queue: build scheduled_run token plans: %w", err)
 	}
 	metricKeys := make([]string, len(r.Metrics))
 	for i, m := range r.Metrics {
@@ -249,7 +254,8 @@ func buildScheduledRunTask(r application.ScheduleRecord, opts EnqueueOptions) (*
 		StrategyKind:     r.Strategy.Kind(),
 		StrategyData:     stratData,
 		MetricKeys:       metricKeys,
-		AddressPlansData: planData,
+		AddressPlansData: addressPlanData,
+		TokenPlansData:   tokenPlanData,
 		CronExpr:         r.Schedule.CronExpr(),
 	}.Marshal()
 	if err != nil {

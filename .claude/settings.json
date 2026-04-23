@@ -1,5 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "PATH": "/Users/seokheejang/.gvm/pkgsets/go1.24.6/global/bin:/Users/seokheejang/.gvm/gos/go1.24.6/bin:${PATH}"
+  },
   "permissions": {
     "allow": [
       "Bash(go *)",
@@ -51,7 +54,8 @@
       "Bash(kubectl describe *)",
       "Bash(kubectl logs *)",
       "Skill(ralph)",
-      "Skill(ralph:*)"
+      "Skill(ralph:*)",
+      "Read(//**)"
     ],
     "deny": [
       "Bash(rm -rf /)",

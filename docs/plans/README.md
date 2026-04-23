@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7.6 + 8 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 8 HTTP API 완료 — /healthz /readyz /runs /diffs /schedules /sources 5개 리소스 + /openapi.json + `csw openapi-dump` CLI. ExecuteRun 5개 메트릭 클러스터 커버. 다음은 Phase 9 (Next.js 프론트) 또는 Phase 7I.2 (TokenPlans 퍼시스턴스 라운드트립).**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7I.2 + 7.6 + 8 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 7I.2 TokenPlans 퍼시스턴스 라운드트립 완료 — runs/schedules.token_plans JSONB 컬럼 (migration 005/006), Marshal/UnmarshalTokenPlans, ScheduleRunInput/SchedulePayload/ScheduleRecord/ScheduledRunPayload TokenPlans 필드, HTTP DTO TokenPlanInput/KnownTokensIn/ResolveTokenPlans, RunView/ScheduleView TokenPlanKinds. 다음은 Phase 9 (Next.js 프론트).**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -88,10 +88,11 @@ examples/
 | **Phase 7.6** — handler 메트릭 미들웨어: `queue.LoggingMiddleware(logger)` (task type / duration_ms / 성공-실패 slog 로깅). worker main에서 `mux.Use(queue.LoggingMiddleware(logger))` 로 체인 선두에 배선. asynqmon은 이미 `docker-compose.yml` `tools` profile에 존재. | `76aaedf` |
 | **Phase 8.1** — HTTP API 서버 골격: chi 라우터 + huma v2 + humachi adapter, 미들웨어(requestid(X-Request-ID echo)/logging(slog request log)/recover(panic→500+stack)/cors(origin allow-list)), `routes/health.go` (`/healthz` 리브니스 + `/readyz` 리디니스), huma가 자동 서빙하는 `/openapi.json` + `/docs`, `cmd/csw-server/main.go` (DATABASE_URL/REDIS_URL 필수, Postgres PingContext + Redis TCP dial로 readiness 체크), `persistence.Ping(ctx, db)` 헬퍼 신설, `routes.HealthDeps`/`routes.HealthChecker` 포트. | `9aa153c` |
 | **Phase 8.2** — /runs 리소스: `internal/application/cancel_run.go` (Run.Cancel coordinator), `httpapi/dto/run.go` (SamplingInput/TriggerInput/ScheduleInput/AddressPlanInput 디스크리미네이터 union + CreateRunRequest/RunView/ListRunsResponse + ToDomain/ToRunView 매퍼), `routes/runs.go` (POST /runs 생성 → ScheduleRun.Execute, GET /runs/{id} 상세, GET /runs?chain_id/status/limit/offset 리스트, POST /runs/{id}/cancel → CancelRun.Execute). `routes.MapError` (`routes/errors.go`) — 애플리케이션 센티넬 에러 → huma HTTP 에러 매핑. Import cycle 방지를 위해 errors.go를 routes 패키지로 이동. httptest 기반 10종 테스트. | (pending commit) |
+| **Phase 7I.2** — TokenPlans 퍼시스턴스/전파: migration 005/006 (`runs.token_plans`, `schedules.token_plans` JSONB), `persistence.Marshal/UnmarshalTokenPlans` + `tokenPlanEnvelope`/`knownTokensJSON`, `verification.Rehydrate` variadic→explicit slices + `tokenPlans`, mapper 양방향 라운드트립, `application.SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput` TokenPlans 필드, `queue.ScheduledRunPayload.TokenPlansData` + dispatcher/handler 전파, `dto.TokenPlanInput`/`KnownTokensIn`/`ResolveTokenPlans` + `CreateRunRequest`/`CreateScheduleRequest` `token_plans` 필드 + `RunView`/`ScheduleView.TokenPlanKinds`. 인메모리 + testcontainers DB 라운드트립 테스트 추가. | (pending commit) |
 
 ### 진행 중
 
-- (follow-up) **TokenPlans 퍼시스턴스 라운드트립** — 현재 `Run.SetTokenPlans`는 in-memory만 유지. persistence mapper / `runs.token_plans` JSONB 컬럼 (migration 005) / `SchedulePayload.TokenPlans` / `ScheduleRecord.TokenPlans` / scheduled-run payload / `ScheduleRun` 유스케이스 pass-through 모두 미구현. Phase 8 HTTP API에서 schedule 생성 경로 붙일 때 같이 처리.
+- ✅ (Phase 7I.2 완료) **TokenPlans 퍼시스턴스 라운드트립** — runs/schedules `token_plans` JSONB 컬럼 (migration 005/006), persistence mapper, `SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput`/`ScheduledRunPayload` TokenPlans 필드, HTTP `TokenPlanInput` DTO, `ScheduleRun` 유스케이스 pass-through 모두 완료.
 - (follow-up) **추가 TokenSamplingPlan 스트래텀** — TopNTokens / RandomTokens / FromHoldings (Holdings 결과의 union). 현재 KnownTokens만 구현됨.
 - (follow-up) Snapshot 경로. 현재 ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings + ERC20 Balance 커버.
 - (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest / AddressAtBlock / ERC20 Holdings / ERC20 Balance fetch에 적용됨, Block fetch만 남음.
@@ -178,7 +179,7 @@ examples/
 | 7G | Application — ExecuteRun AddressAtBlock 경로 (extractor + runAddressAtBlockPass + fetchAll with Budget) | ✅ Done | 7C.3 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7H | Application — ExecuteRun ERC20 Holdings 경로 (canonical extractor + runERC20HoldingsLatestPass + filterByCapability) | ✅ Done | 7C.3 | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7I | Application — ERC20 Balance(per-token) 경로 + TokenSamplingPlan + TokenSampler 포트 | ✅ Done (MVP) | 7H | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
-| 7I.2 | Persistence / scheduled-run — TokenPlans round-trip (runs.token_plans JSONB, SchedulePayload/ScheduleRecord 필드, pass-through) | ⬜ Not started | 7I | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
+| 7I.2 | Persistence / scheduled-run — TokenPlans round-trip (runs/schedules.token_plans JSONB, SchedulePayload/ScheduleRecord/ScheduledRunPayload 필드, HTTP TokenPlanInput, pass-through) | ✅ Done | 7I | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 7.6 | Observability — `queue.LoggingMiddleware` (slog duration/outcome) + asynqmon docker-compose profile | ✅ Done | 7A | [phase-07-queue-scheduler.md](./phase-07-queue-scheduler.md) |
 | 8.1 | HTTP API — server skeleton (chi + huma) + 미들웨어(requestid/logging/recover/cors) + /healthz /readyz + /openapi.json + cmd/csw-server | ✅ Done | 5, 6 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.2 | HTTP API — /runs 라우트 (POST/GET list/GET detail/POST cancel) + dto.{Sampling,Trigger,Schedule,AddressPlan}Input + CancelRun 유스케이스 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |

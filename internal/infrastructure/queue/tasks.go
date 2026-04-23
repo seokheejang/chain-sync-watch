@@ -54,20 +54,22 @@ func UnmarshalExecuteRunPayload(data []byte) (ExecuteRunPayload, error) {
 // from a stored PeriodicTaskConfig; the worker-side handler
 // constructs a fresh Run and invokes the execution pipeline.
 //
-// StrategyData / AddressPlansData are opaque JSON blobs — the
-// handler decodes them via the same serialise helpers the
-// persistence layer uses, which keeps the queue package free of
-// domain-specific unmarshal logic.
+// StrategyData / AddressPlansData / TokenPlansData are opaque JSON
+// blobs — the handler decodes them via the same serialise helpers
+// the persistence layer uses, which keeps the queue package free
+// of domain-specific unmarshal logic.
 //
-// AddressPlansData may be empty (nil / "[]") — that signals "no
-// address stratum" and is the default for cron-scheduled Runs that
-// only check block-immutable fields.
+// AddressPlansData / TokenPlansData may each be empty (nil / "[]")
+// — that signals "no address stratum" or "no token stratum" and is
+// the default for cron-scheduled Runs that only check
+// block-immutable fields.
 type ScheduledRunPayload struct {
 	ChainID          uint64   `json:"chain_id"`
 	StrategyKind     string   `json:"strategy_kind"`
 	StrategyData     []byte   `json:"strategy_data"`
 	MetricKeys       []string `json:"metric_keys"`
 	AddressPlansData []byte   `json:"address_plans_data,omitempty"`
+	TokenPlansData   []byte   `json:"token_plans_data,omitempty"`
 	CronExpr         string   `json:"cron_expr"`
 }
 

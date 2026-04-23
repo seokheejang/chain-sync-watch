@@ -125,9 +125,14 @@ func (h *Handlers) HandleScheduledRun(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
 	}
 
-	plans, err := persistence.UnmarshalAddressPlans(p.AddressPlansData)
+	addressPlans, err := persistence.UnmarshalAddressPlans(p.AddressPlansData)
 	if err != nil {
-		h.logWarn("scheduled_run decode plans", "err", err)
+		h.logWarn("scheduled_run decode address plans", "err", err)
+		return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
+	}
+	tokenPlans, err := persistence.UnmarshalTokenPlans(p.TokenPlansData)
+	if err != nil {
+		h.logWarn("scheduled_run decode token plans", "err", err)
 		return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
 	}
 
@@ -153,11 +158,17 @@ func (h *Handlers) HandleScheduledRun(ctx context.Context, t *asynq.Task) error 
 		metrics,
 		verification.ScheduledTrigger{CronExpr: p.CronExpr},
 		h.Clock.Now(),
-		plans...,
+		addressPlans...,
 	)
 	if err != nil {
 		h.logWarn("scheduled_run build run", "err", err)
 		return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
+	}
+	if len(tokenPlans) > 0 {
+		if err := run.SetTokenPlans(tokenPlans...); err != nil {
+			h.logWarn("scheduled_run set token plans", "err", err)
+			return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
+		}
 	}
 
 	if err := h.Runs.Save(ctx, run); err != nil {

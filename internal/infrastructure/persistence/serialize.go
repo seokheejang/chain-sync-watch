@@ -151,6 +151,21 @@ func UnmarshalAddressPlans(data []byte) ([]verification.AddressSamplingPlan, err
 	return unmarshalAddressPlans(data)
 }
 
+// MarshalTokenPlans / UnmarshalTokenPlans expose the token-plan
+// array marshaller for the same reason as their address counterpart
+// — queue.Dispatcher and HTTP scheduled-run payloads must ride the
+// same JSONB format as the runs.token_plans / schedules.token_plans
+// columns.
+func MarshalTokenPlans(plans []verification.TokenSamplingPlan) ([]byte, error) {
+	return marshalTokenPlans(plans)
+}
+
+// UnmarshalTokenPlans decodes the JSONB array back to the domain
+// slice. Both NULL and "[]" resolve to nil.
+func UnmarshalTokenPlans(data []byte) ([]verification.TokenSamplingPlan, error) {
+	return unmarshalTokenPlans(data)
+}
+
 func unmarshalStrategy(kind string, data []byte) (verification.SamplingStrategy, error) {
 	switch kind {
 	case verification.KindFixedList:
@@ -320,6 +335,97 @@ func unmarshalAddressPlan(kind string, data []byte) (verification.AddressSamplin
 		}, nil
 	}
 	return nil, fmt.Errorf("persistence: unknown address plan kind %q", kind)
+}
+
+// --- TokenSamplingPlan serialisation ------------------------------
+//
+// Same envelope shape as addressPlanEnvelope; kept separate so the
+// kind namespaces don't collide and so future token-only metadata
+// (e.g. a per-plan "observed_at" field) can land without touching
+// the address plan wire format.
+
+type tokenPlanEnvelope struct {
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data"`
+}
+
+type knownTokensJSON struct {
+	Tokens []chain.Address `json:"tokens"`
+}
+
+// marshalTokenPlans encodes the full plan list into the JSONB array
+// stored in runs.token_plans / schedules.token_plans. An empty /
+// nil slice becomes "[]" rather than "null" so the NOT NULL column
+// default holds.
+func marshalTokenPlans(plans []verification.TokenSamplingPlan) ([]byte, error) {
+	if len(plans) == 0 {
+		return []byte("[]"), nil
+	}
+	envelopes := make([]tokenPlanEnvelope, len(plans))
+	for i, p := range plans {
+		data, err := marshalTokenPlanData(p)
+		if err != nil {
+			return nil, err
+		}
+		envelopes[i] = tokenPlanEnvelope{Kind: p.Kind(), Data: data}
+	}
+	return json.Marshal(envelopes)
+}
+
+// marshalTokenPlanData keeps a type-switch instead of a type-assert-
+// and-if so adding TopNTokens / RandomTokens / FromHoldings later is
+// a single case branch — matches marshalAddressPlanData.
+//
+//nolint:gocritic // singleCaseSwitch: future stratums slot in as cases.
+func marshalTokenPlanData(p verification.TokenSamplingPlan) ([]byte, error) {
+	switch v := p.(type) {
+	case verification.KnownTokens:
+		return json.Marshal(knownTokensJSON{Tokens: v.Tokens})
+	}
+	return nil, fmt.Errorf("persistence: unknown token plan type %T", p)
+}
+
+// unmarshalTokenPlans decodes the JSONB array back into the domain
+// slice. Empty bytes, literal NULL, and "[]" all resolve to a nil
+// slice — the zero value the Run aggregate treats as "no token
+// coverage".
+func unmarshalTokenPlans(data []byte) ([]verification.TokenSamplingPlan, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	trimmed := string(data)
+	if trimmed == "null" || trimmed == "[]" {
+		return nil, nil
+	}
+	var envelopes []tokenPlanEnvelope
+	if err := json.Unmarshal(data, &envelopes); err != nil {
+		return nil, fmt.Errorf("persistence: decode token plans: %w", err)
+	}
+	out := make([]verification.TokenSamplingPlan, 0, len(envelopes))
+	for _, env := range envelopes {
+		plan, err := unmarshalTokenPlan(env.Kind, env.Data)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, plan)
+	}
+	return out, nil
+}
+
+// unmarshalTokenPlan mirrors the type-switch shape of its marshal
+// counterpart; future kind literals slot in as additional cases.
+//
+//nolint:gocritic // singleCaseSwitch: future stratums slot in as cases.
+func unmarshalTokenPlan(kind string, data []byte) (verification.TokenSamplingPlan, error) {
+	switch kind {
+	case verification.KindKnownTokens:
+		var v knownTokensJSON
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("persistence: decode known_tokens: %w", err)
+		}
+		return verification.KnownTokens{Tokens: v.Tokens}, nil
+	}
+	return nil, fmt.Errorf("persistence: unknown token plan kind %q", kind)
 }
 
 // --- ValueSnapshot serialisation ----------------------------------

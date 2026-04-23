@@ -232,6 +232,43 @@ func (p AddressPlanInput) ToDomain() (verification.AddressSamplingPlan, error) {
 	}
 }
 
+// --- Token plan ---------------------------------------------------------
+
+// TokenPlanInput is the discriminated-union encoding for the
+// TokenSamplingPlan stratums. Only the Known stratum ships today;
+// future stratums (top_n_tokens, random_tokens, from_holdings) slot
+// in with additional sub-structs and case branches.
+type TokenPlanInput struct {
+	Kind  string         `json:"kind" enum:"known_tokens"`
+	Known *KnownTokensIn `json:"known,omitempty"`
+}
+
+// KnownTokensIn is a hand-picked ERC-20 contract list.
+type KnownTokensIn struct {
+	Tokens []string `json:"tokens" minItems:"1" doc:"0x-prefixed EIP-55 ERC-20 contract addresses"`
+}
+
+// ToDomain resolves the token plan DTO to the domain plan value.
+func (p TokenPlanInput) ToDomain() (verification.TokenSamplingPlan, error) {
+	switch p.Kind {
+	case verification.KindKnownTokens:
+		if p.Known == nil {
+			return nil, errors.New("token_plan: known body missing")
+		}
+		tokens := make([]chain.Address, len(p.Known.Tokens))
+		for i, s := range p.Known.Tokens {
+			a, err := chain.NewAddress(s)
+			if err != nil {
+				return nil, fmt.Errorf("token_plan.known[%d]: %w", i, err)
+			}
+			tokens[i] = a
+		}
+		return verification.KnownTokens{Tokens: tokens}, nil
+	default:
+		return nil, fmt.Errorf("token_plan: unknown kind %q", p.Kind)
+	}
+}
+
 // --- Run (request / view) -----------------------------------------------
 
 // CreateRunRequest is the POST /runs body.
@@ -242,6 +279,7 @@ type CreateRunRequest struct {
 	Trigger      TriggerInput       `json:"trigger"`
 	Schedule     *ScheduleInput     `json:"schedule,omitempty" doc:"Required when trigger.kind is scheduled"`
 	AddressPlans []AddressPlanInput `json:"address_plans,omitempty"`
+	TokenPlans   []TokenPlanInput   `json:"token_plans,omitempty"`
 }
 
 // ToUseCase folds the request into application.ScheduleRunInput,
@@ -271,6 +309,10 @@ func (r CreateRunRequest) ToUseCase() (application.ScheduleRunInput, error) {
 	if err != nil {
 		return application.ScheduleRunInput{}, err
 	}
+	tokens, err := ResolveTokenPlans(r.TokenPlans)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
+	}
 	return application.ScheduleRunInput{
 		ChainID:      chain.ChainID(r.ChainID),
 		Strategy:     strategy,
@@ -278,6 +320,7 @@ func (r CreateRunRequest) ToUseCase() (application.ScheduleRunInput, error) {
 		Trigger:      trigger,
 		Schedule:     sched,
 		AddressPlans: plans,
+		TokenPlans:   tokens,
 	}, nil
 }
 
@@ -310,6 +353,20 @@ func ResolveAddressPlans(inputs []AddressPlanInput) ([]verification.AddressSampl
 	return out, nil
 }
 
+// ResolveTokenPlans maps TokenPlanInput entries to their domain
+// equivalents, prefixing plan errors with their slice index.
+func ResolveTokenPlans(inputs []TokenPlanInput) ([]verification.TokenSamplingPlan, error) {
+	out := make([]verification.TokenSamplingPlan, 0, len(inputs))
+	for i, p := range inputs {
+		dp, err := p.ToDomain()
+		if err != nil {
+			return nil, fmt.Errorf("token_plans[%d]: %w", i, err)
+		}
+		out = append(out, dp)
+	}
+	return out, nil
+}
+
 // CreateRunResponse is the POST /runs body.
 type CreateRunResponse struct {
 	RunID string  `json:"run_id"`
@@ -326,6 +383,7 @@ type RunView struct {
 	Metrics          []string   `json:"metrics"`
 	TriggerKind      string     `json:"trigger_kind"`
 	AddressPlanKinds []string   `json:"address_plan_kinds,omitempty"`
+	TokenPlanKinds   []string   `json:"token_plan_kinds,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	FinishedAt       *time.Time `json:"finished_at,omitempty"`
@@ -339,12 +397,20 @@ func ToRunView(r *verification.Run) RunView {
 	for i, m := range metrics {
 		mkeys[i] = m.Key
 	}
-	plans := r.AddressPlans()
-	var pkinds []string
-	if len(plans) > 0 {
-		pkinds = make([]string, len(plans))
-		for i, p := range plans {
-			pkinds[i] = p.Kind()
+	addressPlans := r.AddressPlans()
+	var akinds []string
+	if len(addressPlans) > 0 {
+		akinds = make([]string, len(addressPlans))
+		for i, p := range addressPlans {
+			akinds[i] = p.Kind()
+		}
+	}
+	tokenPlans := r.TokenPlans()
+	var tkinds []string
+	if len(tokenPlans) > 0 {
+		tkinds = make([]string, len(tokenPlans))
+		for i, p := range tokenPlans {
+			tkinds[i] = p.Kind()
 		}
 	}
 	return RunView{
@@ -354,7 +420,8 @@ func ToRunView(r *verification.Run) RunView {
 		StrategyKind:     r.Strategy().Kind(),
 		Metrics:          mkeys,
 		TriggerKind:      r.Trigger().Kind(),
-		AddressPlanKinds: pkinds,
+		AddressPlanKinds: akinds,
+		TokenPlanKinds:   tkinds,
 		CreatedAt:        r.CreatedAt(),
 		StartedAt:        r.StartedAt(),
 		FinishedAt:       r.FinishedAt(),

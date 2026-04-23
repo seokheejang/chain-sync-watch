@@ -38,7 +38,11 @@ func toRunModel(r *verification.Run) (runModel, error) {
 	if err != nil {
 		return runModel{}, err
 	}
-	planData, err := marshalAddressPlans(r.AddressPlans())
+	addressPlanData, err := marshalAddressPlans(r.AddressPlans())
+	if err != nil {
+		return runModel{}, err
+	}
+	tokenPlanData, err := marshalTokenPlans(r.TokenPlans())
 	if err != nil {
 		return runModel{}, err
 	}
@@ -56,7 +60,8 @@ func toRunModel(r *verification.Run) (runModel, error) {
 		TriggerData:  trigData,
 		StrategyKind: r.Strategy().Kind(),
 		StrategyData: stratData,
-		AddressPlans: planData,
+		AddressPlans: addressPlanData,
+		TokenPlans:   tokenPlanData,
 		Metrics:      keys,
 		ErrorMsg:     r.ErrorMessage(),
 		CreatedAt:    r.CreatedAt(),
@@ -74,7 +79,11 @@ func toRun(m runModel) (*verification.Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	plans, err := unmarshalAddressPlans(m.AddressPlans)
+	addressPlans, err := unmarshalAddressPlans(m.AddressPlans)
+	if err != nil {
+		return nil, err
+	}
+	tokenPlans, err := unmarshalTokenPlans(m.TokenPlans)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +107,8 @@ func toRun(m runModel) (*verification.Run, error) {
 		m.StartedAt,
 		m.FinishedAt,
 		m.ErrorMsg,
-		plans...,
+		addressPlans,
+		tokenPlans,
 	)
 }
 
@@ -167,7 +177,11 @@ func toScheduleModel(s application.ScheduleRecord) (scheduleModel, error) {
 	if err != nil {
 		return scheduleModel{}, err
 	}
-	planData, err := marshalAddressPlans(s.AddressPlans)
+	addressPlanData, err := marshalAddressPlans(s.AddressPlans)
+	if err != nil {
+		return scheduleModel{}, err
+	}
+	tokenPlanData, err := marshalTokenPlans(s.TokenPlans)
 	if err != nil {
 		return scheduleModel{}, err
 	}
@@ -186,7 +200,8 @@ func toScheduleModel(s application.ScheduleRecord) (scheduleModel, error) {
 		Timezone:     tz,
 		StrategyKind: s.Strategy.Kind(),
 		StrategyData: stratData,
-		AddressPlans: planData,
+		AddressPlans: addressPlanData,
+		TokenPlans:   tokenPlanData,
 		Metrics:      keys,
 		Active:       s.Active,
 		CreatedAt:    s.CreatedAt,
@@ -202,7 +217,11 @@ func toScheduleRecord(m scheduleModel) (application.ScheduleRecord, error) {
 	if err != nil {
 		return application.ScheduleRecord{}, err
 	}
-	plans, err := unmarshalAddressPlans(m.AddressPlans)
+	addressPlans, err := unmarshalAddressPlans(m.AddressPlans)
+	if err != nil {
+		return application.ScheduleRecord{}, err
+	}
+	tokenPlans, err := unmarshalTokenPlans(m.TokenPlans)
 	if err != nil {
 		return application.ScheduleRecord{}, err
 	}
@@ -220,7 +239,8 @@ func toScheduleRecord(m scheduleModel) (application.ScheduleRecord, error) {
 		Schedule:     schedule,
 		Strategy:     strategy,
 		Metrics:      metrics,
-		AddressPlans: plans,
+		AddressPlans: addressPlans,
+		TokenPlans:   tokenPlans,
 		CreatedAt:    m.CreatedAt,
 		Active:       m.Active,
 	}, nil

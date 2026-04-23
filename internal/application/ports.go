@@ -72,13 +72,15 @@ type JobID string
 // SchedulePayload carries the configuration a recurring job needs
 // to materialise a Run at firing time. The Trigger is filled in by
 // the scheduler itself (ScheduledTrigger with the cron expression
-// that fired). AddressPlans is optional — zero plans means the
-// materialised Run will cover only block-immutable metrics.
+// that fired). AddressPlans / TokenPlans are optional — zero plans
+// means the materialised Run will cover only block-immutable
+// metrics (or skip the address / token passes accordingly).
 type SchedulePayload struct {
 	ChainID      chain.ChainID
 	Metrics      []verification.Metric
 	Strategy     verification.SamplingStrategy
 	AddressPlans []verification.AddressSamplingPlan
+	TokenPlans   []verification.TokenSamplingPlan
 }
 
 // --- Ports -----------------------------------------------------------
@@ -158,6 +160,7 @@ type ScheduleRecord struct {
 	Strategy     verification.SamplingStrategy
 	Metrics      []verification.Metric
 	AddressPlans []verification.AddressSamplingPlan
+	TokenPlans   []verification.TokenSamplingPlan
 	CreatedAt    time.Time
 	Active       bool
 }

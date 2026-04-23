@@ -17,6 +17,7 @@ type CreateScheduleRequest struct {
 	Sampling     SamplingInput      `json:"sampling"`
 	Schedule     ScheduleInput      `json:"schedule" doc:"Cron + timezone"`
 	AddressPlans []AddressPlanInput `json:"address_plans,omitempty"`
+	TokenPlans   []TokenPlanInput   `json:"token_plans,omitempty"`
 }
 
 // CreateScheduleResponse is the POST /schedules body.
@@ -37,6 +38,7 @@ type ScheduleView struct {
 	StrategyKind     string    `json:"strategy_kind"`
 	MetricKeys       []string  `json:"metric_keys"`
 	AddressPlanKinds []string  `json:"address_plan_kinds,omitempty"`
+	TokenPlanKinds   []string  `json:"token_plan_kinds,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	Active           bool      `json:"active"`
 }
@@ -56,11 +58,18 @@ func ToScheduleView(rec application.ScheduleRecord) ScheduleView {
 	for i, m := range rec.Metrics {
 		mkeys[i] = m.Key
 	}
-	var pkinds []string
+	var akinds []string
 	if len(rec.AddressPlans) > 0 {
-		pkinds = make([]string, len(rec.AddressPlans))
+		akinds = make([]string, len(rec.AddressPlans))
 		for i, p := range rec.AddressPlans {
-			pkinds[i] = p.Kind()
+			akinds[i] = p.Kind()
+		}
+	}
+	var tkinds []string
+	if len(rec.TokenPlans) > 0 {
+		tkinds = make([]string, len(rec.TokenPlans))
+		for i, p := range rec.TokenPlans {
+			tkinds[i] = p.Kind()
 		}
 	}
 	view := ScheduleView{
@@ -69,7 +78,8 @@ func ToScheduleView(rec application.ScheduleRecord) ScheduleView {
 		CronExpr:         rec.Schedule.CronExpr(),
 		StrategyKind:     rec.Strategy.Kind(),
 		MetricKeys:       mkeys,
-		AddressPlanKinds: pkinds,
+		AddressPlanKinds: akinds,
+		TokenPlanKinds:   tkinds,
 		CreatedAt:        rec.CreatedAt,
 		Active:           rec.Active,
 	}
