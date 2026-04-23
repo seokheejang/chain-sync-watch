@@ -97,6 +97,31 @@ docker run --rm caddy:2.8-alpine caddy hash-password -p 'your-password'
 # paste into .env as CSW_AUTH_HASH + CSW_AUTH_USER
 ```
 
+## Adding a private adapter
+
+The bundled set (`rpc` / `blockscout` / `routescan`) covers public
+sources. To verify against an **internal indexer** without leaking
+its API shape into this OSS repo:
+
+1. Copy `examples/custom-graphql-adapter/` → `private/<yourname>/`
+   (the `private/` tree is gitignored — nothing from it ends up in
+   a public PR).
+2. Adapt the GraphQL queries / response field names to your real
+   schema. Leave `source.ErrUnsupported` on capabilities your
+   indexer can't serve.
+3. Build with the private tag:
+   ```bash
+   make build-private
+   ```
+4. Add a row via `/sources` (type = `<yourname>`, endpoint = your
+   GraphQL URL, optional api key). The UI dropdown auto-populates
+   from `/sources/types`.
+5. The Go binary with the `-tags=private` flag wires your adapter
+   into the gateway Registry; public / CI builds never see it.
+
+See [`examples/custom-graphql-adapter/README.md`](./examples/custom-graphql-adapter/README.md)
+for the full pattern.
+
 ## Security checklist
 
 * **`CSW_SECRET_KEY`** is the AES-GCM master for every 3rd-party

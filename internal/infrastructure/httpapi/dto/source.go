@@ -53,9 +53,14 @@ func ToSourceCapabilityMatrix(s source.Source) SourceCapabilityMatrix {
 // server never ships credential material over the wire, even
 // encrypted, because ciphertext plus a compromised CSW_SECRET_KEY
 // is game-over.
+//
+// Type is an open string rather than an OpenAPI enum because
+// private-build forks add their own adapter types via
+// gateway.Registry. The backend still validates — an unknown type
+// yields ErrUnknownType at build time before any row is persisted.
 type SourceConfigView struct {
 	ID        string         `json:"id"`
-	Type      string         `json:"type" enum:"rpc,blockscout,routescan" doc:"Adapter type"`
+	Type      string         `json:"type" doc:"Adapter type (rpc / blockscout / routescan, or a private-build custom type)"`
 	ChainID   uint64         `json:"chain_id"`
 	Endpoint  string         `json:"endpoint"`
 	Options   map[string]any `json:"options"`
@@ -94,11 +99,22 @@ type ListSourcesResponse struct {
 	Total int                `json:"total"`
 }
 
+// SourceTypesResponse lists the adapter type strings the current
+// binary's gateway Registry knows about. The admin UI feeds this
+// to the type dropdown so private-build deployments see their
+// custom types without a public-repo code change.
+type SourceTypesResponse struct {
+	Types []string `json:"types"`
+}
+
 // CreateSourceRequest is the POST /sources body. APIKey is plaintext
 // on the wire (TLS protects transport); the server encrypts with
 // CSW_SECRET_KEY before persisting. APIKey="" means "no credential".
+// Type accepts any adapter type the backend's gateway.Registry
+// knows about — an unknown value errors at handler time rather
+// than being silently accepted.
 type CreateSourceRequest struct {
-	Type     string         `json:"type" enum:"rpc,blockscout,routescan" doc:"Adapter type"`
+	Type     string         `json:"type" minLength:"1" doc:"Adapter type registered in the gateway (rpc / blockscout / routescan by default; private builds may add more)"`
 	ChainID  uint64         `json:"chain_id" minimum:"1" example:"10"`
 	Endpoint string         `json:"endpoint" minLength:"1"`
 	APIKey   string         `json:"api_key,omitempty" doc:"Plaintext secret; server encrypts with CSW_SECRET_KEY before persisting. Empty = no credential."`

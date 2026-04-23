@@ -153,6 +153,22 @@ export function useSource(id: string) {
 // capability matrix. Split from useSource because it depends on
 // runtime adapter instantiation; listing rows for the CRUD table
 // doesn't need it.
+// useSourceTypes returns the adapter type strings the backend's
+// gateway.Registry currently knows about. Private-build
+// deployments add entries here transparently — the UI's type
+// dropdown always reflects the running binary.
+export function useSourceTypes() {
+  return useQuery({
+    queryKey: ["source-types"],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/sources/types", { signal });
+      if (error) throw new Error("list source types failed");
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
 export function useSourceCapabilities(id: string) {
   return useQuery({
     queryKey: ["source-capabilities", id],

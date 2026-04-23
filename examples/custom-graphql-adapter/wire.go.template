@@ -1,0 +1,25 @@
+// TEMPLATE — rename to wire.go under private/<yourname>/.
+
+//go:build private
+
+package yourindexer
+
+import (
+	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/gateway"
+	"github.com/seokheejang/chain-sync-watch/internal/source"
+)
+
+const TypeName = "yourindexer" // TODO rename
+
+func Register(reg gateway.Registry) {
+	reg.Add(TypeName, factory)
+}
+
+func factory(cfg application.SourceConfig, apiKey []byte) (source.Source, error) {
+	var opts []Option
+	if len(apiKey) > 0 {
+		opts = append(opts, WithAuthToken(string(apiKey)))
+	}
+	return New(cfg.ChainID, cfg.Endpoint, opts...)
+}

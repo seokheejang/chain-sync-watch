@@ -102,10 +102,17 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	dispatcher := queue.NewDispatcher(redisOpt, schedules)
 	defer func() { _ = dispatcher.Close() }()
 
+	// registerPrivateAdapters is a no-op in default builds; the
+	// `private` build tag swaps in the wiring from
+	// cmd/csw-worker/private_on.go so private/* adapters show up
+	// without touching default OSS artifacts.
+	reg := gateway.DefaultRegistry()
+	registerPrivateAdapters(reg)
+
 	exec := &application.ExecuteRun{
 		Runs:      runs,
 		Diffs:     diffs,
-		Sources:   gateway.NewDBGateway(sourcesRepo, cipher, nil),
+		Sources:   gateway.NewDBGateway(sourcesRepo, cipher, reg),
 		ChainHead: gateway.NewRPCChainHead(sourcesRepo),
 		Clock:     clock,
 		Policy:    diff.DefaultPolicy{},

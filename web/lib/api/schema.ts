@@ -217,6 +217,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sources/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List adapter type strings registered in this binary */
+        get: operations["list-source-types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sources/{id}": {
         parameters: {
             query?: never;
@@ -353,11 +370,8 @@ export interface components {
             options?: {
                 [key: string]: unknown;
             };
-            /**
-             * @description Adapter type
-             * @enum {string}
-             */
-            type: "rpc" | "blockscout" | "routescan";
+            /** @description Adapter type registered in the gateway (rpc / blockscout / routescan by default; private builds may add more) */
+            type: string;
         };
         DiffView: {
             /**
@@ -663,13 +677,19 @@ export interface components {
             options: {
                 [key: string]: unknown;
             };
-            /**
-             * @description Adapter type
-             * @enum {string}
-             */
-            type: "rpc" | "blockscout" | "routescan";
+            /** @description Adapter type (rpc / blockscout / routescan, or a private-build custom type) */
+            type: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        SourceTypesResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/SourceTypesResponse.json
+             */
+            readonly $schema?: string;
+            types: string[] | null;
         };
         SparseStepsIn: {
             /**
@@ -1213,6 +1233,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceConfigView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-source-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceTypesResponse"];
                 };
             };
             /** @description Error */

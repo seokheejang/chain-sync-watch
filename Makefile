@@ -79,6 +79,13 @@ build-%: ## Build a single binary (e.g. make build-csw-server)
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w' -o $(BIN_DIR)/$* ./cmd/$*
 
+.PHONY: build-private
+build-private: ## Build csw-server + csw-worker with private/* adapters (`-tags=private`). Requires non-empty private/.
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 $(GO) build -tags=private -trimpath -ldflags='-s -w' -o $(BIN_DIR)/csw-server ./cmd/csw-server
+	CGO_ENABLED=0 $(GO) build -tags=private -trimpath -ldflags='-s -w' -o $(BIN_DIR)/csw-worker ./cmd/csw-worker
+	@echo "Built private-tagged binaries in $(BIN_DIR)/"
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) coverage.out coverage.html

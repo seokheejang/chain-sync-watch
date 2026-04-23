@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -146,7 +147,12 @@ func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher)
 
 	clock := stubs.SystemClock{}
 	dispatcher := queue.NewDispatcher(redisOpt, schedules)
-	dbGateway := gateway.NewDBGateway(sourcesRepo, cipher, nil)
+	reg := gateway.DefaultRegistry()
+	// registerPrivateAdapters is a no-op in the default build and
+	// plugs in private/<user-package>/Register calls under the
+	// `private` build tag. See cmd/csw-server/private_on.go.
+	registerPrivateAdapters(reg)
+	dbGateway := gateway.NewDBGateway(sourcesRepo, cipher, reg)
 	policy := diff.DefaultPolicy{}
 
 	schedule := &application.ScheduleRun{Runs: runs, Dispatcher: dispatcher, Clock: clock}
@@ -182,6 +188,7 @@ func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher)
 			Gateway: dbGateway,
 			Cipher:  cipher,
 			Clock:   clock,
+			Types:   registryKeys(reg),
 		},
 	}
 }
@@ -218,6 +225,17 @@ func pingRedis(ctx context.Context, opt asynq.RedisConnOpt) error {
 		return err
 	}
 	return conn.Close()
+}
+
+// registryKeys returns a stable, sorted slice of the Registry's
+// type strings. Routes expose this via GET /sources/types.
+func registryKeys(r gateway.Registry) []string {
+	out := make([]string, 0, len(r))
+	for k := range r {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func envOrDefault(key, fallback string) string {

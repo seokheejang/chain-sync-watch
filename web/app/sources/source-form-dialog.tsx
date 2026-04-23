@@ -15,14 +15,19 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Schemas } from "@/lib/api/client";
+import { useSourceTypes } from "@/lib/api/hooks";
 
 // SourceFormValues is the shape both the create and edit flows
 // round-trip through react-hook-form. Fields that only matter in
 // one mode (`clear_secret` on edit, `chain_id` picker on create)
 // are still present on both sides — the parent picks which ones to
 // read out.
+//
+// type is a plain string (not a literal union) because private
+// builds register additional adapter types at runtime — the
+// dropdown's options come from the /sources/types endpoint.
 export type SourceFormValues = {
-  type: "rpc" | "blockscout" | "routescan";
+  type: string;
   chain_id: number;
   endpoint: string;
   api_key: string;
@@ -32,8 +37,6 @@ export type SourceFormValues = {
 };
 
 type SourceRow = Schemas["SourceConfigView"];
-
-const ADAPTER_TYPES: SourceFormValues["type"][] = ["rpc", "blockscout", "routescan"];
 
 export function SourceFormDialog({
   open,
@@ -61,6 +64,12 @@ export function SourceFormDialog({
       clear_secret: false,
     },
   });
+
+  // Types come from the backend — private builds surface custom
+  // types without a frontend code change. Fall back to the public
+  // bundled set while loading or if the endpoint is unreachable.
+  const { data: typesData } = useSourceTypes();
+  const adapterTypes = typesData?.types ?? ["blockscout", "routescan", "rpc"];
 
   // Prefill the form whenever the dialog opens. React-hook-form
   // doesn't re-read defaultValues on prop change, so a manual reset
@@ -112,7 +121,7 @@ export function SourceFormDialog({
                 {...form.register("type")}
                 className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {ADAPTER_TYPES.map((t) => (
+                {adapterTypes.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>

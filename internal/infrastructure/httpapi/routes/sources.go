@@ -36,6 +36,12 @@ type SourcesDeps struct {
 	Gateway application.SourceGateway
 	Cipher  *secrets.Cipher
 	Clock   application.Clock
+	// Types is the list of adapter type strings the current
+	// binary's gateway.Registry knows about. Surfaces through
+	// GET /sources/types so the admin UI can populate its type
+	// dropdown without a hard-coded enum (private builds add
+	// entries here transparently).
+	Types []string
 }
 
 // RegisterSources mounts the /sources resource. Handlers are
@@ -54,6 +60,23 @@ func RegisterSources(api huma.API, d SourcesDeps) {
 	if d.Gateway != nil {
 		registerSourceCapabilities(api, d.Gateway)
 	}
+	if len(d.Types) > 0 {
+		registerSourceTypes(api, d.Types)
+	}
+}
+
+func registerSourceTypes(api huma.API, types []string) {
+	huma.Register(api, huma.Operation{
+		OperationID: "list-source-types",
+		Method:      http.MethodGet,
+		Path:        "/sources/types",
+		Summary:     "List adapter type strings registered in this binary",
+		Tags:        []string{"sources"},
+	}, func(_ context.Context, _ *struct{}) (*sourceTypesOutput, error) {
+		out := &sourceTypesOutput{}
+		out.Body.Types = append([]string(nil), types...)
+		return out, nil
+	})
 }
 
 func registerSourceCRUD(api huma.API, d SourcesDeps) {
@@ -277,4 +300,8 @@ type updateSourceInput struct {
 
 type sourceCapabilityOutput struct {
 	Body dto.SourceCapabilityMatrix
+}
+
+type sourceTypesOutput struct {
+	Body dto.SourceTypesResponse
 }
