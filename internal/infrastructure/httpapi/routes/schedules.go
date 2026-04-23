@@ -10,7 +10,6 @@ import (
 	"github.com/seokheejang/chain-sync-watch/internal/application"
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/dto"
-	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/verification"
 )
 
@@ -115,21 +114,13 @@ func scheduleRequestToUseCase(r dto.CreateScheduleRequest) (application.Schedule
 	if sched.IsZero() {
 		return application.ScheduleRunInput{}, fmt.Errorf("schedule.cron_expr is required")
 	}
-	metrics := make([]verification.Metric, 0, len(r.Metrics))
-	for _, key := range r.Metrics {
-		m, ok := persistence.MetricByKey(key)
-		if !ok {
-			return application.ScheduleRunInput{}, fmt.Errorf("metrics: unknown key %q", key)
-		}
-		metrics = append(metrics, m)
+	metrics, err := dto.ResolveMetrics(r.Metrics)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
 	}
-	plans := make([]verification.AddressSamplingPlan, 0, len(r.AddressPlans))
-	for i, p := range r.AddressPlans {
-		dp, err := p.ToDomain()
-		if err != nil {
-			return application.ScheduleRunInput{}, fmt.Errorf("address_plans[%d]: %w", i, err)
-		}
-		plans = append(plans, dp)
+	plans, err := dto.ResolveAddressPlans(r.AddressPlans)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
 	}
 	return application.ScheduleRunInput{
 		ChainID:      chain.ChainID(r.ChainID),

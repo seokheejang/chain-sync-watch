@@ -66,7 +66,10 @@ func (uc ReplayDiff) Execute(ctx context.Context, id DiffID) (ReplayResult, erro
 		sources = append(sources, s)
 	}
 
-	results := fetchBlockAll(ctx, sources, rec.Discrepancy.Block)
+	block := rec.Discrepancy.Block
+	results := fanOutFetch(ctx, sources, nil, func(ctx context.Context, s source.Source) (source.BlockResult, error) {
+		return s.FetchBlock(ctx, source.BlockQuery{Number: block})
+	})
 	snapshots := map[source.SourceID]diff.ValueSnapshot{}
 	for _, fr := range results {
 		if fr.err != nil {

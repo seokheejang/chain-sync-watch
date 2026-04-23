@@ -134,18 +134,12 @@ func extractAddressAtBlockField(capb source.Capability, r source.AddressAtBlockR
 }
 
 // extractERC20BalanceField renders an ERC20BalanceResult into its
-// canonical string form. Only CapERC20BalanceAtLatest is handled;
-// the caller has already filtered metrics by Capability so a
-// mismatch here signals a programming error, not a data condition.
-//
-// Balance is a big.Int decimal — same convention as plain account
-// balance. Decimals and Symbol are metadata, not comparison
-// targets; operators who want to cross-check token metadata wire up
-// a dedicated metric rather than embedding it in the balance diff.
-func extractERC20BalanceField(capb source.Capability, r source.ERC20BalanceResult) (string, bool) {
-	if capb != source.CapERC20BalanceAtLatest {
-		return "", false
-	}
+// canonical big.Int decimal. Balance metadata (Decimals, Symbol) is
+// not a comparison target — operators who want to cross-check token
+// metadata wire up a dedicated metric rather than embedding it in
+// the balance diff. The caller filters metrics by Capability before
+// invoking this helper.
+func extractERC20BalanceField(_ source.Capability, r source.ERC20BalanceResult) (string, bool) {
 	if r.Balance == nil {
 		return "", false
 	}
@@ -176,10 +170,10 @@ func extractERC20BalanceField(capb source.Capability, r source.ERC20BalanceResul
 // nil Balance on a TokenHolding is a malformed record; we render
 // it as "<contract>=" so a disagreement still surfaces rather than
 // being silently dropped.
-func extractERC20HoldingsField(capb source.Capability, r source.ERC20HoldingsResult) (string, bool) {
-	if capb != source.CapERC20HoldingsAtLatest {
-		return "", false
-	}
+//
+// The caller filters metrics by Capability before invoking this
+// helper, so we don't re-check capb here.
+func extractERC20HoldingsField(_ source.Capability, r source.ERC20HoldingsResult) (string, bool) {
 	holdings := make([]source.TokenHolding, len(r.Tokens))
 	copy(holdings, r.Tokens)
 	sort.Slice(holdings, func(i, j int) bool {

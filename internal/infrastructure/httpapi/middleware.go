@@ -79,15 +79,11 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 // expose the status, hence this wrapper.
 type statusRecorder struct {
 	http.ResponseWriter
-	status      int
-	wroteHeader bool
+	status int
 }
 
 func (s *statusRecorder) WriteHeader(status int) {
-	if !s.wroteHeader {
-		s.status = status
-		s.wroteHeader = true
-	}
+	s.status = status
 	s.ResponseWriter.WriteHeader(status)
 }
 

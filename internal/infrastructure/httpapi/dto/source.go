@@ -39,7 +39,7 @@ func ToSourceView(s source.Source) SourceView {
 		}
 		caps = append(caps, CapabilityView{
 			Name: string(c),
-			Tier: tierString(c.Tier()),
+			Tier: c.Tier().String(),
 		})
 	}
 	return SourceView{

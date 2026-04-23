@@ -1,18 +1,14 @@
 // Command csw-server is the HTTP API process. It fronts the
 // Postgres-backed RunRepository / DiffRepository via the application
 // use cases and exposes them as a huma-managed REST surface plus an
-// OpenAPI 3.1 document at /openapi.json.
-//
-// Phase 8.1 scope: the server boots, connects to Postgres and Redis
-// (for readiness probing), serves /healthz, /readyz, /openapi.json,
-// and /docs. Resource routes (runs / diffs / schedules / sources)
-// land in 8.2–8.5 — a Phase 8.1 build is useful for Kubernetes
-// probes and spec tooling even without the business endpoints.
+// OpenAPI 3.1 document at /openapi.json. A liveness (/healthz) and
+// a readiness (/readyz) probe ship alongside so Kubernetes rollouts
+// can gate traffic.
 //
 // Environment:
 //
-//	DATABASE_URL — Postgres DSN for readiness probes (and later
-//	              resource repositories).
+//	DATABASE_URL — Postgres DSN for readiness probes and resource
+//	              repositories.
 //	REDIS_URL    — asynq Redis DSN; used by readiness.
 //	CSW_SERVER_ADDR — optional listener, defaults to :8080.
 package main
@@ -26,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -158,23 +155,10 @@ func splitNonEmpty(s string) []string {
 		return nil
 	}
 	out := []string{}
-	for _, part := range splitComma(s) {
+	for _, part := range strings.Split(s, ",") {
 		if part != "" {
 			out = append(out, part)
 		}
 	}
-	return out
-}
-
-func splitComma(s string) []string {
-	var out []string
-	start := 0
-	for i, r := range s {
-		if r == ',' {
-			out = append(out, s[start:i])
-			start = i + 1
-		}
-	}
-	out = append(out, s[start:])
 	return out
 }

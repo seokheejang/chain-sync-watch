@@ -1,11 +1,11 @@
 package dto
 
 import (
+	"sort"
 	"time"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
-	"github.com/seokheejang/chain-sync-watch/internal/source"
 )
 
 // ValueSnapshotView is the per-source observed value inside a Diff
@@ -95,25 +95,9 @@ func ToDiffView(id application.DiffID, rec application.DiffRecord) DiffView {
 		TrustedSources: trusted,
 		Resolved:       rec.Resolved,
 		ResolvedAt:     rec.ResolvedAt,
-		Tier:           tierString(rec.Tier),
+		Tier:           rec.Tier.String(),
 		AnchorBlock:    rec.AnchorBlock.Uint64(),
 		SamplingSeed:   rec.SamplingSeed,
-	}
-}
-
-// tierString renders source.Tier into the string exposed on the
-// wire. source.TierUnknown (zero value) becomes "unknown" so the
-// frontend can distinguish "tier info missing" from "Tier A".
-func tierString(t source.Tier) string {
-	switch t {
-	case source.TierA:
-		return "A"
-	case source.TierB:
-		return "B"
-	case source.TierC:
-		return "C"
-	default:
-		return "unknown"
 	}
 }
 
@@ -169,10 +153,5 @@ func errSeverity(s string) error { return severityError(s) }
 // --- helpers ---------------------------------------------------------
 
 func sortSnapshotsBySource(vs []ValueSnapshotView) {
-	// simple insertion sort; N is typically 2–5 sources.
-	for i := 1; i < len(vs); i++ {
-		for j := i; j > 0 && vs[j].SourceID < vs[j-1].SourceID; j-- {
-			vs[j], vs[j-1] = vs[j-1], vs[j]
-		}
-	}
+	sort.Slice(vs, func(i, j int) bool { return vs[i].SourceID < vs[j].SourceID })
 }

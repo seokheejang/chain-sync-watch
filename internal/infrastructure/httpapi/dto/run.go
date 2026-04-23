@@ -256,13 +256,9 @@ func (r CreateRunRequest) ToUseCase() (application.ScheduleRunInput, error) {
 	if err != nil {
 		return application.ScheduleRunInput{}, err
 	}
-	metrics := make([]verification.Metric, 0, len(r.Metrics))
-	for _, key := range r.Metrics {
-		m, ok := persistence.MetricByKey(key)
-		if !ok {
-			return application.ScheduleRunInput{}, fmt.Errorf("metrics: unknown key %q", key)
-		}
-		metrics = append(metrics, m)
+	metrics, err := ResolveMetrics(r.Metrics)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
 	}
 	var sched verification.Schedule
 	if r.Schedule != nil {
@@ -271,13 +267,9 @@ func (r CreateRunRequest) ToUseCase() (application.ScheduleRunInput, error) {
 			return application.ScheduleRunInput{}, err
 		}
 	}
-	plans := make([]verification.AddressSamplingPlan, 0, len(r.AddressPlans))
-	for i, p := range r.AddressPlans {
-		dp, err := p.ToDomain()
-		if err != nil {
-			return application.ScheduleRunInput{}, fmt.Errorf("address_plans[%d]: %w", i, err)
-		}
-		plans = append(plans, dp)
+	plans, err := ResolveAddressPlans(r.AddressPlans)
+	if err != nil {
+		return application.ScheduleRunInput{}, err
 	}
 	return application.ScheduleRunInput{
 		ChainID:      chain.ChainID(r.ChainID),
@@ -287,6 +279,35 @@ func (r CreateRunRequest) ToUseCase() (application.ScheduleRunInput, error) {
 		Schedule:     sched,
 		AddressPlans: plans,
 	}, nil
+}
+
+// ResolveMetrics maps metric keys to the registered verification.Metric
+// entries, surfacing unknown keys as errors so both /runs and
+// /schedules responders produce the same 400 message.
+func ResolveMetrics(keys []string) ([]verification.Metric, error) {
+	out := make([]verification.Metric, 0, len(keys))
+	for _, key := range keys {
+		m, ok := persistence.MetricByKey(key)
+		if !ok {
+			return nil, fmt.Errorf("metrics: unknown key %q", key)
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// ResolveAddressPlans maps AddressPlanInput entries to their domain
+// equivalents, prefixing plan errors with their slice index.
+func ResolveAddressPlans(inputs []AddressPlanInput) ([]verification.AddressSamplingPlan, error) {
+	out := make([]verification.AddressSamplingPlan, 0, len(inputs))
+	for i, p := range inputs {
+		dp, err := p.ToDomain()
+		if err != nil {
+			return nil, fmt.Errorf("address_plans[%d]: %w", i, err)
+		}
+		out = append(out, dp)
+	}
+	return out, nil
 }
 
 // CreateRunResponse is the POST /runs body.
