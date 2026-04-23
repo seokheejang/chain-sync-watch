@@ -127,10 +127,14 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        # Bake the API base URL into the bundle. Leave empty for a
-        # proxied deployment where the frontend hits relative paths
-        # rewritten by caddy/nginx to the server upstream.
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+        # NEXT_PUBLIC_* is baked into the JS bundle at build time.
+        # Default targets the csw-server port exposed by this
+        # compose file so `make stack-up` works on localhost with
+        # no extra env. Behind a reverse proxy (e.g. the caddy
+        # `auth` profile, or production ingress) set this to ""
+        # so the bundle uses relative URLs and the proxy rewrites
+        # /api/* to the backend.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL-http://localhost:8080}
     image: csw-web:latest
     container_name: csw-web
     restart: unless-stopped
