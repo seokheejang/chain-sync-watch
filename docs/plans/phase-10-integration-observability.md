@@ -1,5 +1,80 @@
 # Phase 10 — Integration / Observability / Deploy
 
+Phase 10은 두 단계로 쪼갭니다:
+
+- **Phase 10a — Source Configuration Store** (이 문서 상단 섹션). DB-backed 어댑터 구성, 암호화된 시크릿, YAML 시드, `/sources` CRUD UI. ExecuteRun과 ReplayDiff가 실제 데이터를 쓰기 위한 필수 전제.
+- **Phase 10b — Observability / Deploy** (이 문서 기존 섹션). 로깅·메트릭 통일, docker-compose 통합, E2E, 배포 가이드.
+
+---
+
+## Phase 10a — Source Configuration Store
+
+### 결정 사항 (2026-04-23 컨설트)
+
+| 항목 | 결정 |
+|---|---|
+| 아키텍처 | **하이브리드: YAML 시드 → DB 단일 진실** |
+| YAML 역할 | `go:embed defaults.yaml`로 번들된 초기 시드. `csw migrate seed`가 DB 빈 경우에만 1회 삽입. 런타임 머징 없음 |
+| 시크릿 저장 | **DB 암호화 컬럼**. AES-GCM, 마스터 키는 단일 env var (`CSW_SECRET_KEY`). 외부 KMS는 post-MVP |
+| 인증 (Phase 10a) | **없음** — 로컬 MVP 가정. README에 "프로덕션은 reverse proxy 인증 앞단 필수" 경고 |
+| 인증 (팀 공유 시) | **Option A**: Caddy/nginx basic auth 앞단 (docker-compose에 옵셔널 서비스). 앱 코드 불변 |
+| 인증 (나중에) | Option C: oauth2-proxy or NextAuth OIDC. 이메일 allow-list env var → 향후 DB role 테이블로 승격 |
+| UI 구조 | `/sources` 리소스 페이지에 **CRUD 통합**. 별도 `/admin` 라우트 분리 안 함. API는 role-aware 미들웨어 자리(slot)만 비워둠 |
+| 배포 모델 | 시작은 개인 로컬 → 팀 공유 (single instance, multi-user). multi-tenant SaaS는 비 범위 |
+
+### 산출물 (DoD)
+
+- [ ] **migration 007** — `sources` 테이블 (id, type, chain_id, endpoint, secret_ciphertext, secret_nonce, enabled, created_at, updated_at)
+- [ ] `internal/secrets/` — AES-GCM 래퍼 (`Encrypt([]byte, []byte) ([]byte, nonce, error)`, `Decrypt`). 마스터 키는 `CSW_SECRET_KEY` env에서 읽음 (32바이트 base64); 없으면 앱 부팅 실패
+- [ ] `internal/infrastructure/persistence/source_repository.go` — gorm 기반 CRUD + 도메인 변환 (`SourceConfig` 값객체)
+- [ ] `internal/infrastructure/gateway/` — DB-backed `SourceGateway` 구현체. `ForChain(id)` 호출 시 DB에서 enabled=true 행 로드 → 어댑터 타입별 팩토리 (`adapters/rpc/New`, `adapters/blockscout/New`, `adapters/routescan/New`) 호출
+- [ ] `ChainHead` 실제 구현 — RPC 어댑터 재사용 (blockNumber + `finalized` tag). `stubs.NullChainHead`는 폴백으로만
+- [ ] `csw migrate seed` 서브커맨드 — 임베디드 defaults.yaml을 읽어 sources 테이블 빈 경우에만 INSERT. api_key 필드가 env var 레퍼런스(`env:CSW_FOO_KEY` 형식)면 env 값을 읽어 암호화 후 삽입
+- [ ] httpapi 라우트:
+  - `POST /sources` — 새 소스 생성 (CreateSourceRequest: type, chain_id, endpoint, api_key optional)
+  - `PUT /sources/{id}` — 업데이트
+  - `DELETE /sources/{id}` — 소프트 삭제 (enabled=false)
+  - `POST /sources/{id}/test` — 어댑터 연결 smoke-test (선택; post-10a OK)
+- [ ] API 미들웨어 role-aware slot — `middleware/role.go`. Phase 10a에선 no-op (항상 통과). Phase 10b 팀 공유 시 enforcement 켬
+- [ ] `web/app/sources/` — CRUD UI (create dialog, edit, delete 확인 다이얼로그). api_key 입력은 password field + 서버 응답엔 절대 포함 안 됨
+- [ ] README.md — `CSW_SECRET_KEY` 생성 가이드 (`openssl rand -base64 32`) + 프로덕션 인증 경고
+- [ ] `cmd/csw-server/main.go` / `cmd/csw-worker/main.go` 수정 — `stubs.NullGateway` / `stubs.NullChainHead` 제거, 실제 팩토리 주입
+
+### 세부 단계 (구현 순서)
+
+1. **migration 007** (sources 테이블 + 인덱스)
+2. **`internal/secrets`** + 단위 테스트 (roundtrip, key size 검증, nonce 유일성)
+3. **`internal/infrastructure/persistence/source_repository.go`** + 도메인 `SourceConfig` 타입 + round-trip 테스트
+4. **어댑터 팩토리** — `internal/infrastructure/gateway/factory.go`. type string → adapter.Source 매핑. 단위 테스트 (unknown type → err, 각 타입 → New 호출 검증)
+5. **`gateway.DBGateway`** — `SourceRepository` + factory 조합. `ForChain` / `Get` 구현. 캐싱 전략: per-request 캐시 (요청 초반 1회 DB read) 또는 TTL 캐시 (post-MVP)
+6. **실제 `ChainHead`** — `rpc.Adapter`의 `FetchBlock(finalized)` 경로 재사용
+7. **`csw migrate seed`** — 임베디드 YAML 파싱 → env 레퍼런스 해결 → `sources` INSERT
+8. **API + DTO + 라우트** — `/sources` CRUD
+9. **UI** — `/sources` 페이지 CRUD + `useCreateSource` / `useUpdateSource` / `useDeleteSource` 훅
+10. **csw-server 와이어링 갱신** — stubs 제거
+11. README + 배포 경고
+
+### 보안 주의
+
+- **API 응답에 절대 복호화된 api_key 포함 금지**. GET /sources 응답은 `has_api_key: bool`만. 편집 시에도 비워두면 유지, 새 값 입력 시 교체
+- **로그에 api_key 평문 금지** — observability 레이어 스크러버 추가
+- `CSW_SECRET_KEY` 로테이션: post-MVP. MVP는 교체 시 `csw rotate-secrets <old> <new>` 수동 커맨드 문서화
+- DB 덤프 공유 시: 암호화된 상태라 안전하지만, 동시에 `CSW_SECRET_KEY`가 유출되면 같이 위험 → 둘을 물리적으로 분리 보관
+
+### 의존
+
+- Phase 6 (persistence) — ✅ 완료
+- Phase 7I.2 (TokenPlans round-trip 패턴) — ✅ 완료 (migration + 암호화 없는 JSONB 칼럼 추가 패턴 참고)
+- Phase 8 (HTTP API) — ✅ 완료
+
+### Phase 10b 착수 전제
+
+Phase 10a 완료 후 실제 어댑터로 discrepancy가 잡히는 end-to-end 흐름 확인 → Phase 10b (observability/deploy) 착수.
+
+---
+
+## Phase 10b — Observability / Deploy (이하 기존 내용)
+
 ## 목표
 
 모든 구성요소를 **하나로 묶고**, 관측성을 확보하고, 실제 돌아가는 데모 환경 완성. MVP 론칭 준비.

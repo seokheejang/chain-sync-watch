@@ -30,4 +30,12 @@ var (
 	// metrics list, nil strategy, etc.). The underlying verification-
 	// layer error is wrapped and retrievable via errors.Unwrap.
 	ErrInvalidRun = errors.New("application: invalid run")
+
+	// ErrSourceNotFound — no SourceConfig with the given id exists.
+	ErrSourceNotFound = errors.New("application: source not found")
+
+	// ErrDuplicateSource — a SourceConfig with the same (Type,
+	// ChainID) pair already exists. The DB UNIQUE constraint surfaces
+	// as this sentinel so the HTTP layer can map to 409 Conflict.
+	ErrDuplicateSource = errors.New("application: duplicate source for chain")
 )

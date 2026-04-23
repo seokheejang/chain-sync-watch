@@ -86,3 +86,35 @@ type scheduleModel struct {
 
 // TableName pins the table name.
 func (scheduleModel) TableName() string { return "schedules" }
+
+// sourceModel mirrors the `sources` table (migration 007). The
+// natural key is (Type, ChainID); ID is a surrogate operator-visible
+// handle that downstream HTTP routes key on so the admin can rename
+// the primary key string without touching (Type, ChainID) UNIQUE.
+//
+// SecretCiphertext / SecretNonce travel together — the CHECK in the
+// migration guards against one-without-the-other. A row with both
+// NULL represents "no credential" (public RPC / Blockscout etc.).
+//
+// Options is the adapter-specific JSONB bag (archive, rate limits,
+// etc.). The mapper decodes it into map[string]any; interpreting
+// individual fields is the gateway factory's responsibility.
+type sourceModel struct {
+	ID               string `gorm:"primaryKey;column:id"`
+	ChainID          uint64 `gorm:"column:chain_id;not null"`
+	Type             string `gorm:"column:type;not null"`
+	Endpoint         string `gorm:"column:endpoint;not null"`
+	SecretCiphertext []byte `gorm:"column:secret_ciphertext"`
+	SecretNonce      []byte `gorm:"column:secret_nonce"`
+	Options          []byte `gorm:"column:options;type:jsonb;not null"`
+	// Enabled: DB-side default is true (migration 007). We do NOT set
+	// a gorm `default:` tag because gorm would then treat the bool
+	// zero value as "unset" and omit the column on INSERT — a
+	// Save(..., Enabled:false) would silently persist as true.
+	Enabled   bool      `gorm:"column:enabled;not null"`
+	CreatedAt time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
+}
+
+// TableName pins the table name.
+func (sourceModel) TableName() string { return "sources" }

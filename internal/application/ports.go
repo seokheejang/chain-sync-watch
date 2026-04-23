@@ -165,6 +165,63 @@ type ScheduleRecord struct {
 	Active       bool
 }
 
+// --- Source configuration store (Phase 10a) ---------------------------
+
+// SourceConfig is the persisted, transport-friendly record a
+// SourceGateway uses to materialise an adapter.Source at request
+// time. ID is an opaque string the admin UI assigns (UUID-ish); the
+// (Type, ChainID) pair is the natural key and carries UNIQUE at the
+// DB layer.
+//
+// SecretCiphertext + SecretNonce hold AES-GCM output from
+// secrets.Cipher. They are nil when the adapter needs no credential
+// (public RPC / Blockscout / Routescan). The plaintext api_key never
+// lives outside the request that encrypts or decrypts it.
+//
+// Options is a JSONB blob that carries per-adapter settings the
+// gateway factory passes through to adapter.Option builders — e.g.
+// `{"archive": true, "rate_limit_rps": 10}` for the rpc adapter.
+// Schema is intentionally loose because each adapter owns its
+// option shape; config parsers validate at factory time.
+type SourceConfig struct {
+	ID               string
+	ChainID          chain.ChainID
+	Type             string
+	Endpoint         string
+	SecretCiphertext []byte
+	SecretNonce      []byte
+	Options          map[string]any
+	Enabled          bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// HasSecret reports whether the config carries an encrypted
+// credential. Used by the UI read path to render "secret set"
+// without exposing the ciphertext, and by the gateway to decide
+// whether to decrypt.
+func (s SourceConfig) HasSecret() bool {
+	return len(s.SecretCiphertext) > 0 && len(s.SecretNonce) > 0
+}
+
+// SourceConfigRepository persists SourceConfig rows. Contract:
+//
+//   - Save: upsert on ID. Creation stamps CreatedAt; updates stamp
+//     UpdatedAt. Violating UNIQUE(Type, ChainID) surfaces as
+//     ErrDuplicateSource so the HTTP layer can map to 409.
+//   - Delete: hard delete by ID. Implementations may soft-delete by
+//     flipping Enabled=false instead when the caller passes the
+//     dedicated API; plain Delete is destructive.
+//   - ListByChain: returns every row for a chain. enabledOnly
+//     filters to Enabled=true (the gateway's normal path).
+//   - FindByID: returns ErrSourceNotFound when the id is free.
+type SourceConfigRepository interface {
+	Save(ctx context.Context, s SourceConfig) error
+	FindByID(ctx context.Context, id string) (*SourceConfig, error)
+	ListByChain(ctx context.Context, chainID chain.ChainID, enabledOnly bool) ([]SourceConfig, error)
+	Delete(ctx context.Context, id string) error
+}
+
 // ScheduleRepository is the durable backing store for recurring job
 // configurations. Implementations must:
 //

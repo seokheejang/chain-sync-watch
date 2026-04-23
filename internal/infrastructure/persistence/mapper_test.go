@@ -518,6 +518,63 @@ func TestScheduleRoundTrip_RejectsUnknownStrategyKind(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSourceConfig_RoundTripOptions(t *testing.T) {
+	// In-memory mapper round-trip: options map survives JSON encode
+	// + decode; an empty map encodes to "{}" rather than nil.
+	now := time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC)
+	cfg := application.SourceConfig{
+		ID:        "rpc-opt",
+		ChainID:   chain.OptimismMainnet,
+		Type:      "rpc",
+		Endpoint:  "https://optimism-rpc.publicnode.com",
+		Options:   map[string]any{"archive": true, "rate_limit_rps": float64(10)},
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	m, err := toSourceModel(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "rpc", m.Type)
+	require.NotEqual(t, "{}", string(m.Options))
+
+	back, err := toSourceConfig(m)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Endpoint, back.Endpoint)
+	require.Equal(t, cfg.ChainID, back.ChainID)
+	require.Equal(t, true, back.Options["archive"])
+	require.Equal(t, float64(10), back.Options["rate_limit_rps"])
+}
+
+func TestSourceConfig_EmptyOptionsRoundTrip(t *testing.T) {
+	cfg := application.SourceConfig{
+		ID:      "bs-opt",
+		ChainID: chain.OptimismMainnet,
+		Type:    "blockscout",
+	}
+	m, err := toSourceModel(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "{}", string(m.Options))
+
+	back, err := toSourceConfig(m)
+	require.NoError(t, err)
+	require.NotNil(t, back.Options)
+	require.Empty(t, back.Options)
+}
+
+func TestSourceConfig_HasSecret(t *testing.T) {
+	empty := application.SourceConfig{}
+	require.False(t, empty.HasSecret())
+
+	withSecret := application.SourceConfig{
+		SecretCiphertext: []byte{1},
+		SecretNonce:      []byte{2},
+	}
+	require.True(t, withSecret.HasSecret())
+
+	halfFilled := application.SourceConfig{SecretCiphertext: []byte{1}}
+	require.False(t, halfFilled.HasSecret())
+}
+
 func TestDiffRoundTrip_BlockSubject(t *testing.T) {
 	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
 	rb := chain.BlockNumber(990)

@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7I.2 + 7.6 + 8 + 9.1~9.4 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 9.1~9.4 프론트 골격 완료 — Next.js 16 + Tailwind v4 + shadcn/ui + TanStack Query + openapi-typescript + Biome + next-themes. 5개 라우트(/, /runs, /diffs, /schedules, /sources) 스텁 + API 연결. 다음은 Phase 9.5 (/runs 상세 + 생성 폼) 등 페이지별 구현.**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7I.2 + 7.6 + 8 + 9.1~9.5 완료, Phase 10a 스펙 확정)
+**현재 단계**: **Phase 9.5 완료 — /runs/[id] 상세 + /runs/new 생성 폼. 다음은 Phase 10a (DB-backed sources + AES-GCM 암호화 + YAML 시드 + CRUD UI). 결정사항: 하이브리드(시드→DB truth) / env-var 마스터 키 / 인증은 reverse proxy 앞단(Option A) / `/sources` CRUD 통합 (별도 admin 페이지 없음).**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -192,7 +192,8 @@ examples/
 | 9.1-9.4 | Frontend skeleton — Next.js 16 + shadcn/ui + TanStack Query + Biome + openapi-typescript + 공용 레이아웃 + 5개 스텁 페이지 | ✅ Done | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 9.5-9.9 | Frontend pages — /runs 상세 + 생성 폼, /diffs 상세 + replay, /schedules CRUD, /sources capability matrix | ⬜ Not started | 9.1-9.4, openapi-dump 완성 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 9.10 | Integration & deploy — docker-compose에 web 서비스 / runtime env | ⬜ Not started | 9.5-9.9 | [phase-09-frontend.md](./phase-09-frontend.md) |
-| 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
+| 10a | Source configuration store (DB-backed + encrypted secrets + YAML seed + CRUD UI) | ⬜ Not started | 6, 8, 9.1-9.4 | [phase-10-integration-observability.md](./phase-10-integration-observability.md#phase-10a--source-configuration-store) |
+| 10b | Integration / Observability / Local Deploy (+ reverse-proxy auth for team use) | ⬜ Not started | 10a | [phase-10-integration-observability.md](./phase-10-integration-observability.md#phase-10b--observability--deploy-이하-기존-내용) |
 | 11 | Kubernetes 배포 (Helm) | ⬜ Not started | 10 | [phase-11-kubernetes-deploy.md](./phase-11-kubernetes-deploy.md) |
 | 12 | Probe Context — API 응답시간 / 에러 모니터링 (별도 bounded context) | ⬜ Sketch only | 7, 8 | [phase-12-probe-context.md](./phase-12-probe-context.md) |
 
