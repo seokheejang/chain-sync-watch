@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useRuns } from "@/lib/api/hooks";
+import { chainName } from "@/lib/chains";
 
 export default function RunsPage() {
   const router = useRouter();
@@ -85,7 +86,9 @@ export default function RunsPage() {
                     <TableCell>
                       <StatusBadge value={run.status} />
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{run.chain_id}</TableCell>
+                    <TableCell className="text-xs" title={`chain id ${run.chain_id}`}>
+                      {chainName(run.chain_id)}
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{run.strategy_kind}</TableCell>
                     <TableCell className="font-mono text-xs">{run.trigger_kind}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">

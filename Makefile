@@ -181,3 +181,55 @@ logs: ## Tail docker compose logs
 .PHONY: ps
 ps: ## List docker compose services
 	$(COMPOSE) ps
+
+# -------------------- Private indexer tunnel --------------------
+# The proxy bridges localhost:19999 to an internal indexer reachable
+# only via VPN. Script + hard-coded target IP live under private/
+# (gitignored) — the Makefile targets stay public but skip silently
+# if the script is absent (fresh clones / CI).
+
+TUNNEL_SCRIPT := private/scripts/csw-tunnel.py
+TUNNEL_PID    := private/scripts/csw-tunnel.pid
+TUNNEL_LOG    := private/scripts/csw-tunnel.log
+
+.PHONY: tunnel-up
+tunnel-up: ## Start the private indexer tunnel in the background
+	@test -f $(TUNNEL_SCRIPT) || { echo "missing $(TUNNEL_SCRIPT) — skipping"; exit 0; }
+	@if [ -f $(TUNNEL_PID) ] && kill -0 $$(cat $(TUNNEL_PID)) 2>/dev/null; then \
+	  echo "tunnel already running (pid $$(cat $(TUNNEL_PID)))"; exit 0; \
+	fi; \
+	port=$${CSW_TUNNEL_LISTEN##*:}; port=$${port:-19999}; \
+	if lsof -nP -iTCP:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
+	  echo "port $$port already bound (external tunnel?) — skipping"; \
+	  lsof -nP -iTCP:$$port -sTCP:LISTEN | tail -n +1 | head -5; exit 0; \
+	fi; \
+	nohup python3 $(TUNNEL_SCRIPT) >$(TUNNEL_LOG) 2>&1 & pid=$$!; echo $$pid > $(TUNNEL_PID); \
+	sleep 0.3; \
+	if kill -0 $$pid 2>/dev/null; then \
+	  echo "tunnel started (pid $$pid, log $(TUNNEL_LOG))"; \
+	else \
+	  rm -f $(TUNNEL_PID); \
+	  echo "tunnel failed to stay up — last log lines:"; \
+	  tail -5 $(TUNNEL_LOG); exit 1; \
+	fi
+
+.PHONY: tunnel-down
+tunnel-down: ## Stop the private indexer tunnel
+	@if [ -f $(TUNNEL_PID) ] && kill -0 $$(cat $(TUNNEL_PID)) 2>/dev/null; then \
+	  kill $$(cat $(TUNNEL_PID)); rm -f $(TUNNEL_PID); \
+	  echo "tunnel stopped"; \
+	else \
+	  rm -f $(TUNNEL_PID); echo "tunnel not running"; \
+	fi
+
+.PHONY: tunnel-status
+tunnel-status: ## Show tunnel state
+	@if [ -f $(TUNNEL_PID) ] && kill -0 $$(cat $(TUNNEL_PID)) 2>/dev/null; then \
+	  echo "tunnel running (pid $$(cat $(TUNNEL_PID)))"; \
+	else \
+	  echo "tunnel not running"; \
+	fi
+
+.PHONY: tunnel-logs
+tunnel-logs: ## Tail the tunnel log
+	@test -f $(TUNNEL_LOG) && tail -f $(TUNNEL_LOG) || echo "no log yet ($(TUNNEL_LOG))"

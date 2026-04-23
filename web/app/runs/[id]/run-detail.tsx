@@ -2,6 +2,7 @@
 
 import { ArrowLeft, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/shared/empty-state";
@@ -19,7 +20,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useCancelRun, useRun, useRunDiffs } from "@/lib/api/hooks";
+import { useCancelRun, useRun, useRunDiffs, useSources } from "@/lib/api/hooks";
+import { chainLabel } from "@/lib/chains";
 
 // Runs that are still settlable can be cancelled. "Completed" and
 // "failed" are terminal; cancelling those is a no-op that the
@@ -28,9 +30,16 @@ import { useCancelRun, useRun, useRunDiffs } from "@/lib/api/hooks";
 const cancellableStatuses = new Set(["pending", "running"]);
 
 export function RunDetail({ id }: { id: string }) {
+  const router = useRouter();
   const run = useRun(id);
   const diffs = useRunDiffs(id);
   const cancel = useCancelRun();
+  // Sources that were enabled for this chain at the time the
+  // user opens the detail page. The Run itself doesn't pin the
+  // source set historically (a limitation we may revisit), but
+  // showing "sources currently enabled for chain N" is the most
+  // useful proxy for "what this run compared against".
+  const sources = useSources(run.data?.chain_id ?? 0);
 
   if (run.isLoading) {
     return (
@@ -75,7 +84,7 @@ export function RunDetail({ id }: { id: string }) {
           </Link>
           <h1 className="font-mono text-lg font-semibold">{r.id}</h1>
           <p className="text-sm text-muted-foreground">
-            chain {r.chain_id} · {r.strategy_kind} · {r.trigger_kind}
+            {chainLabel(r.chain_id)} · {r.strategy_kind} · {r.trigger_kind}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -106,9 +115,10 @@ export function RunDetail({ id }: { id: string }) {
               ) : diffs.isError ? (
                 <EmptyState title="Couldn't load discrepancies" />
               ) : (diffs.data?.items ?? []).length === 0 ? (
-                <EmptyState
-                  title="No discrepancies"
-                  description="Either the run hasn't produced any yet, or every source agreed."
+                <AllAgreedEmpty
+                  status={r.status}
+                  metricCount={(r.metrics ?? []).length}
+                  sourceCount={(sources.data?.items ?? []).filter((s) => s.enabled).length}
                 />
               ) : (
                 <Table>
@@ -123,7 +133,11 @@ export function RunDetail({ id }: { id: string }) {
                   </TableHeader>
                   <TableBody>
                     {(diffs.data?.items ?? []).map((d) => (
-                      <TableRow key={d.id}>
+                      <TableRow
+                        key={d.id}
+                        className="cursor-pointer"
+                        onClick={() => router.push(`/diffs/${d.id}`)}
+                      >
                         <TableCell>
                           <SeverityBadge value={d.severity} />
                         </TableCell>
@@ -151,7 +165,7 @@ export function RunDetail({ id }: { id: string }) {
             </CardHeader>
             <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
               <Field label="Status" value={<StatusBadge value={r.status} />} />
-              <Field label="Chain" value={r.chain_id} />
+              <Field label="Chain" value={chainLabel(r.chain_id)} />
               <Field label="Strategy" value={r.strategy_kind} />
               <Field label="Trigger" value={r.trigger_kind} />
               <Field label="Created" value={new Date(r.created_at).toLocaleString()} />
@@ -216,8 +230,95 @@ export function RunDetail({ id }: { id: string }) {
               ) : null}
             </CardContent>
           </Card>
+
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>Sources involved</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {sources.isLoading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : (sources.data?.items ?? []).filter((s) => s.enabled).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No enabled sources for this chain — verification had nothing to compare.
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Endpoint</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(sources.data?.items ?? [])
+                      .filter((s) => s.enabled)
+                      .map((s) => (
+                        <TableRow key={s.id}>
+                          <TableCell className="font-mono text-xs">{s.id}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{s.type}</Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">{s.endpoint}</TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground">
+                Shows sources currently enabled for chain {r.chain_id}. Runs do not pin a historical
+                source set — if a source was added or disabled after this run, the list above
+                reflects "now" rather than "when the run executed".
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// AllAgreedEmpty renders the "0 discrepancies" state as a success
+// callout rather than a generic blank slate. The operator sees
+// immediately that the run executed against N sources × M metrics
+// and every comparison agreed — which IS the happy outcome.
+function AllAgreedEmpty({
+  status,
+  metricCount,
+  sourceCount,
+}: {
+  status: string | undefined;
+  metricCount: number;
+  sourceCount: number;
+}) {
+  const terminal = status === "completed" || status === "failed" || status === "cancelled";
+  if (!terminal) {
+    return (
+      <EmptyState
+        title="Run still in flight"
+        description="Discrepancies surface after the worker finishes each block's comparisons."
+      />
+    );
+  }
+  if (status !== "completed") {
+    return (
+      <EmptyState
+        title="No discrepancies recorded"
+        description={`Run ended as ${status}. Discrepancies are only persisted for completed runs.`}
+      />
+    );
+  }
+  const detail =
+    sourceCount > 0
+      ? `${sourceCount} source${sourceCount === 1 ? "" : "s"} × ${metricCount} metric${metricCount === 1 ? "" : "s"} — all comparisons agreed.`
+      : `${metricCount} metric${metricCount === 1 ? "" : "s"} — no divergence detected.`;
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-6 py-8 text-center dark:border-emerald-900 dark:bg-emerald-950/30">
+      <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+        ✓ All sources agreed
+      </p>
+      <p className="mt-1 text-sm text-emerald-800/80 dark:text-emerald-200/80">{detail}</p>
     </div>
   );
 }

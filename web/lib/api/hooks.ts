@@ -90,6 +90,45 @@ export function useCreateRun() {
   });
 }
 
+export function useDiff(id: string) {
+  return useQuery({
+    queryKey: ["diff", id],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/diffs/{id}", {
+        params: { path: { id } },
+        signal,
+      });
+      if (error) throw new Error("get diff failed");
+      return data;
+    },
+    enabled: !!id,
+  });
+}
+
+// useReplayDiff re-runs the comparison for a persisted discrepancy
+// using the same (metric, block, source set) it originally saw. A
+// "resolved" result means the sources now agree (the backend
+// marks the record resolved); a "new_diff_id" points at a fresh
+// row when they still disagree. Invalidates the diff list + the
+// specific record so the caller sees the new state without a
+// manual refresh.
+export function useReplayDiff() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data, error } = await api.POST("/diffs/{id}/replay", {
+        params: { path: { id } },
+      });
+      if (error) throw new Error("replay diff failed");
+      return data;
+    },
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ["diff", id] });
+      qc.invalidateQueries({ queryKey: ["diffs"] });
+    },
+  });
+}
+
 export function useDiffs(params?: {
   run_id?: string;
   metric_key?: string;

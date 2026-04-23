@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 import { EmptyState } from "@/components/shared/empty-state";
 import { SeverityBadge, TierBadge } from "@/components/shared/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,9 +16,8 @@ import {
 } from "@/components/ui/table";
 import { useDiffs } from "@/lib/api/hooks";
 
-// Stub /diffs — full filters, Tier tabs, ReflectedBlock delta,
-// replay, and anchor-window visualisation land in Phase 9.8.
 export default function DiffsPage() {
+  const router = useRouter();
   const { data, isLoading, isError, error } = useDiffs({ limit: 50 });
   const items = data?.items ?? [];
 
@@ -63,7 +64,11 @@ export default function DiffsPage() {
               </TableHeader>
               <TableBody>
                 {items.map((diff) => (
-                  <TableRow key={diff.id}>
+                  <TableRow
+                    key={diff.id}
+                    className="cursor-pointer"
+                    onClick={() => router.push(`/diffs/${diff.id}`)}
+                  >
                     <TableCell>
                       <SeverityBadge value={diff.severity} />
                     </TableCell>

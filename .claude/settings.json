@@ -57,7 +57,20 @@
       "Bash(kubectl logs *)",
       "Skill(ralph)",
       "Skill(ralph:*)",
-      "Read(//**)"
+      "Read(//**)",
+      "Bash(export PATH=*)",
+      "Bash(sleep *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(printenv *)",
+      "Bash(env)",
+      "Bash(command -v *)",
+      "Bash(type *)",
+      "Bash(true)",
+      "Bash(false)",
+      "Bash(./node_modules/.bin/tsc *)",
+      "Bash(./node_modules/.bin/biome check *)",
+      "Read(//opt/homebrew/lib/node_modules/**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
