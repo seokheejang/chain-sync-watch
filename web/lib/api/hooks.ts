@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "@/lib/api/client";
+import { api, type Schemas } from "@/lib/api/client";
 
 // Hooks are thin wrappers around openapi-fetch + TanStack Query so
 // pages consume the API with one-liners and share a single cache.
@@ -19,6 +19,73 @@ export function useRuns(params?: {
       const { data, error } = await api.GET("/runs", { params: { query: params }, signal });
       if (error) throw new Error("list runs failed");
       return data;
+    },
+  });
+}
+
+export function useRun(id: string) {
+  return useQuery({
+    queryKey: ["run", id],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/runs/{id}", {
+        params: { path: { id } },
+        signal,
+      });
+      if (error) throw new Error("get run failed");
+      return data;
+    },
+    enabled: !!id,
+  });
+}
+
+export function useRunDiffs(id: string) {
+  return useQuery({
+    queryKey: ["run-diffs", id],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/runs/{id}/diffs", {
+        params: { path: { id } },
+        signal,
+      });
+      if (error) throw new Error("get run diffs failed");
+      return data;
+    },
+    enabled: !!id,
+  });
+}
+
+// useCancelRun posts to /runs/{id}/cancel and invalidates both the
+// detail and list caches so the UI flips to "cancelled" without a
+// hard refresh.
+export function useCancelRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await api.POST("/runs/{id}/cancel", {
+        params: { path: { id } },
+      });
+      if (error) throw new Error("cancel run failed");
+    },
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ["run", id] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+// useCreateRun wraps POST /runs. The body is the exact
+// CreateRunRequest schema the backend expects, fed from the /runs/new
+// form. Success invalidates the runs list cache so the new row shows
+// up when the user navigates back.
+export function useCreateRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Schemas["CreateRunRequest"]) => {
+      const { data, error } = await api.POST("/runs", { body });
+      if (error) throw new Error("create run failed");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["runs"] });
     },
   });
 }
