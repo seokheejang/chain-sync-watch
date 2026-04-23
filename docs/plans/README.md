@@ -47,8 +47,8 @@ examples/
 
 ## 🔖 현재 작업 시점 (Checkpoint)
 
-**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7I.2 + 7.6 + 8 완료, Phase 12 probe context 스케치 추가)
-**현재 단계**: **Phase 7I.2 TokenPlans 퍼시스턴스 라운드트립 완료 — runs/schedules.token_plans JSONB 컬럼 (migration 005/006), Marshal/UnmarshalTokenPlans, ScheduleRunInput/SchedulePayload/ScheduleRecord/ScheduledRunPayload TokenPlans 필드, HTTP DTO TokenPlanInput/KnownTokensIn/ResolveTokenPlans, RunView/ScheduleView TokenPlanKinds. 다음은 Phase 9 (Next.js 프론트).**
+**최종 업데이트**: 2026-04-23 (Phase 7A~7I + 7I.2 + 7.6 + 8 + 9.1~9.4 완료, Phase 12 probe context 스케치 추가)
+**현재 단계**: **Phase 9.1~9.4 프론트 골격 완료 — Next.js 16 + Tailwind v4 + shadcn/ui + TanStack Query + openapi-typescript + Biome + next-themes. 5개 라우트(/, /runs, /diffs, /schedules, /sources) 스텁 + API 연결. 다음은 Phase 9.5 (/runs 상세 + 생성 폼) 등 페이지별 구현.**
 
 > Phase 12 (probe context — API 응답시간 / 에러 모니터링)는 별도 bounded context로 분리. 설계 스케치는 [phase-12-probe-context.md](./phase-12-probe-context.md) 참고. Phase 8 이후 착수.
 
@@ -89,11 +89,13 @@ examples/
 | **Phase 8.1** — HTTP API 서버 골격: chi 라우터 + huma v2 + humachi adapter, 미들웨어(requestid(X-Request-ID echo)/logging(slog request log)/recover(panic→500+stack)/cors(origin allow-list)), `routes/health.go` (`/healthz` 리브니스 + `/readyz` 리디니스), huma가 자동 서빙하는 `/openapi.json` + `/docs`, `cmd/csw-server/main.go` (DATABASE_URL/REDIS_URL 필수, Postgres PingContext + Redis TCP dial로 readiness 체크), `persistence.Ping(ctx, db)` 헬퍼 신설, `routes.HealthDeps`/`routes.HealthChecker` 포트. | `9aa153c` |
 | **Phase 8.2** — /runs 리소스: `internal/application/cancel_run.go` (Run.Cancel coordinator), `httpapi/dto/run.go` (SamplingInput/TriggerInput/ScheduleInput/AddressPlanInput 디스크리미네이터 union + CreateRunRequest/RunView/ListRunsResponse + ToDomain/ToRunView 매퍼), `routes/runs.go` (POST /runs 생성 → ScheduleRun.Execute, GET /runs/{id} 상세, GET /runs?chain_id/status/limit/offset 리스트, POST /runs/{id}/cancel → CancelRun.Execute). `routes.MapError` (`routes/errors.go`) — 애플리케이션 센티넬 에러 → huma HTTP 에러 매핑. Import cycle 방지를 위해 errors.go를 routes 패키지로 이동. httptest 기반 10종 테스트. | (pending commit) |
 | **Phase 7I.2** — TokenPlans 퍼시스턴스/전파: migration 005/006 (`runs.token_plans`, `schedules.token_plans` JSONB), `persistence.Marshal/UnmarshalTokenPlans` + `tokenPlanEnvelope`/`knownTokensJSON`, `verification.Rehydrate` variadic→explicit slices + `tokenPlans`, mapper 양방향 라운드트립, `application.SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput` TokenPlans 필드, `queue.ScheduledRunPayload.TokenPlansData` + dispatcher/handler 전파, `dto.TokenPlanInput`/`KnownTokensIn`/`ResolveTokenPlans` + `CreateRunRequest`/`CreateScheduleRequest` `token_plans` 필드 + `RunView`/`ScheduleView.TokenPlanKinds`. 인메모리 + testcontainers DB 라운드트립 테스트 추가. | (pending commit) |
+| **Phase 9.1~9.4** — 프론트 골격: `web/` Next.js 16 + Tailwind v4 + shadcn/ui(button/card/table/dialog/dropdown-menu/tabs/badge/skeleton/sonner/input) + Biome(lint/format) + next-themes(다크) + TanStack Query v5(+devtools dev-only) + openapi-typescript(`pnpm gen:api` → `lib/api/schema.ts`) + openapi-fetch(`lib/api/client.ts`) + 공용 훅(`useRuns`/`useDiffs`/`useSchedules`/`useReadiness`). `AppShell` 사이드바+헤더+테마 토글, `StatusBadge`/`SeverityBadge`/`TierBadge`/`EmptyState`. 5개 스텁 페이지(/, /runs, /diffs, /schedules, /sources) 빌드·린트·dev-server 200 응답 확인. `Makefile`에 `web-deps`/`web-gen`/`web-dev`/`web-build`/`web-lint` 타겟. | (pending commit) |
 
 ### 진행 중
 
 - ✅ (Phase 7I.2 완료) **TokenPlans 퍼시스턴스 라운드트립** — runs/schedules `token_plans` JSONB 컬럼 (migration 005/006), persistence mapper, `SchedulePayload`/`ScheduleRecord`/`ScheduleRunInput`/`ScheduledRunPayload` TokenPlans 필드, HTTP `TokenPlanInput` DTO, `ScheduleRun` 유스케이스 pass-through 모두 완료.
 - (follow-up) **추가 TokenSamplingPlan 스트래텀** — TopNTokens / RandomTokens / FromHoldings (Holdings 결과의 union). 현재 KnownTokens만 구현됨.
+- (follow-up) **`csw openapi-dump` 누락 라우트** — `RegisterSources`가 `Gateway == nil`일 때 early-return해서 dumped 스펙에서 `/sources` 제외됨. 유사하게 `RegisterRuns` POST/cancel과 `RegisterSchedules` POST/DELETE도 optional deps 의존. openapi-dump용 stub deps 또는 dry-register 메커니즘 필요. Phase 9.5/9.8/9.9 착수 전 해결 필요.
 - (follow-up) Snapshot 경로. 현재 ExecuteRun은 BlockImmutable + AddressLatest + AddressAtBlock + ERC20 Holdings + ERC20 Balance 커버.
 - (follow-up) Block fetch 경로에도 Budget 통합 — 현재 Budget은 AddressLatest / AddressAtBlock / ERC20 Holdings / ERC20 Balance fetch에 적용됨, Block fetch만 남음.
 
@@ -187,7 +189,9 @@ examples/
 | 8.4 | HTTP API — /schedules 라우트 (POST/GET/DELETE) + QuerySchedules 유스케이스 (TokenPlans 라운드트립은 7I.2에서) | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.5 | HTTP API — /sources 라우트 (capability matrix + tier); chain_id 필수 쿼리 파라미터 | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
 | 8.7 | csw openapi-dump 서브커맨드 (+ `make openapi`) — `--format=json\|yaml`, `--output=path`, 기본 stdout json | ✅ Done | 8.1 | [phase-08-http-api.md](./phase-08-http-api.md) |
-| 9 | Frontend (Next.js 15) | ⬜ Not started | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
+| 9.1-9.4 | Frontend skeleton — Next.js 16 + shadcn/ui + TanStack Query + Biome + openapi-typescript + 공용 레이아웃 + 5개 스텁 페이지 | ✅ Done | 8 | [phase-09-frontend.md](./phase-09-frontend.md) |
+| 9.5-9.9 | Frontend pages — /runs 상세 + 생성 폼, /diffs 상세 + replay, /schedules CRUD, /sources capability matrix | ⬜ Not started | 9.1-9.4, openapi-dump 완성 | [phase-09-frontend.md](./phase-09-frontend.md) |
+| 9.10 | Integration & deploy — docker-compose에 web 서비스 / runtime env | ⬜ Not started | 9.5-9.9 | [phase-09-frontend.md](./phase-09-frontend.md) |
 | 10 | Integration / Observability / Local Deploy | ⬜ Not started | 3, 6, 7, 8, 9 | [phase-10-integration-observability.md](./phase-10-integration-observability.md) |
 | 11 | Kubernetes 배포 (Helm) | ⬜ Not started | 10 | [phase-11-kubernetes-deploy.md](./phase-11-kubernetes-deploy.md) |
 | 12 | Probe Context — API 응답시간 / 에러 모니터링 (별도 bounded context) | ⬜ Sketch only | 7, 8 | [phase-12-probe-context.md](./phase-12-probe-context.md) |

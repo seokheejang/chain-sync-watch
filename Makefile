@@ -115,6 +115,28 @@ openapi: ## Dump OpenAPI spec to web/openapi.json
 	$(GO) run ./cmd/csw openapi-dump > web/openapi.json
 	@echo "Wrote web/openapi.json"
 
+# -------------------- Frontend --------------------
+
+.PHONY: web-deps
+web-deps: ## Install frontend dependencies (pnpm install)
+	cd web && pnpm install
+
+.PHONY: web-gen
+web-gen: openapi ## Regenerate frontend API types from the fresh spec
+	cd web && pnpm gen:api
+
+.PHONY: web-dev
+web-dev: ## Run the Next.js dev server (http://localhost:3000)
+	cd web && pnpm dev
+
+.PHONY: web-build
+web-build: ## Production build of the frontend
+	cd web && pnpm build
+
+.PHONY: web-lint
+web-lint: ## Biome check (frontend)
+	cd web && pnpm lint
+
 # -------------------- Docker compose --------------------
 
 .PHONY: up

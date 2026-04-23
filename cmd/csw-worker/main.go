@@ -33,11 +33,10 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
-	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
-	"github.com/seokheejang/chain-sync-watch/internal/source"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/stubs"
 )
 
 func main() {
@@ -82,15 +81,15 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	diffs := persistence.NewDiffRepo(db)
 	schedules := persistence.NewScheduleRepo(db)
 
-	clock := systemClock{}
+	clock := stubs.SystemClock{}
 	dispatcher := queue.NewDispatcher(redisOpt, schedules)
 	defer func() { _ = dispatcher.Close() }()
 
 	exec := &application.ExecuteRun{
 		Runs:      runs,
 		Diffs:     diffs,
-		Sources:   nullGateway{},
-		ChainHead: nullChainHead{},
+		Sources:   stubs.NullGateway{},
+		ChainHead: stubs.NullChainHead{},
 		Clock:     clock,
 		Policy:    diff.DefaultPolicy{},
 	}
@@ -172,37 +171,6 @@ func envOrDefaultInt(key string, def int) int {
 	}
 	return def
 }
-
-// --- Phase 7A stub ports ---------------------------------------------
-//
-// These zero-functionality implementations let the worker boot and
-// answer health probes before Phase 10 wires real adapters from
-// config. ExecuteRun will fail any Run it picks up here with a clear
-// message, which is the intended signal for operators.
-
-type nullGateway struct{}
-
-func (nullGateway) ForChain(chain.ChainID) ([]source.Source, error) {
-	return nil, nil
-}
-
-func (nullGateway) Get(id source.SourceID) (source.Source, error) {
-	return nil, fmt.Errorf("no sources configured for %q", id)
-}
-
-type nullChainHead struct{}
-
-func (nullChainHead) Tip(context.Context, chain.ChainID) (chain.BlockNumber, error) {
-	return 0, errors.New("chain head not configured")
-}
-
-func (nullChainHead) Finalized(context.Context, chain.ChainID) (chain.BlockNumber, error) {
-	return 0, errors.New("chain head not configured")
-}
-
-type systemClock struct{}
-
-func (systemClock) Now() time.Time { return time.Now() }
 
 // slogAsynqAdapter forwards asynq's internal logs through slog so
 // all worker logs share the same structured pipeline.

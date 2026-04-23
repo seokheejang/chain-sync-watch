@@ -1,16 +1,26 @@
 // Command csw-server is the HTTP API process. It fronts the
-// Postgres-backed RunRepository / DiffRepository via the application
-// use cases and exposes them as a huma-managed REST surface plus an
-// OpenAPI 3.1 document at /openapi.json. A liveness (/healthz) and
-// a readiness (/readyz) probe ship alongside so Kubernetes rollouts
-// can gate traffic.
+// Postgres-backed RunRepository / DiffRepository / ScheduleRepository
+// via the application use cases and exposes them as a huma-managed
+// REST surface plus an OpenAPI 3.1 document at /openapi.json. A
+// liveness (/healthz) and a readiness (/readyz) probe ship alongside
+// so Kubernetes rollouts can gate traffic.
+//
+// Scope note: SourceGateway and ChainHead are stub implementations
+// today (stubs.NullGateway / stubs.NullChainHead). That keeps the
+// HTTP surface fully wired — every route registers and responds —
+// while adapter wiring lands in Phase 10. ReplayDiff against a real
+// discrepancy will surface "chain head not configured" through the
+// normal error path; listing / fetching persisted records works as
+// intended. The /sources endpoint returns an empty capability list
+// until real sources are injected.
 //
 // Environment:
 //
-//	DATABASE_URL — Postgres DSN for readiness probes and resource
-//	              repositories.
-//	REDIS_URL    — asynq Redis DSN; used by readiness.
+//	DATABASE_URL — Postgres DSN for repositories and readiness.
+//	REDIS_URL    — asynq Redis DSN for dispatcher + readiness.
 //	CSW_SERVER_ADDR — optional listener, defaults to :8080.
+//	CSW_SERVER_CORS_ORIGINS — comma-separated allow-list for the
+//	              frontend dev server; empty disables CORS.
 package main
 
 import (
@@ -29,9 +39,13 @@ import (
 	"github.com/hibiken/asynq"
 	"gorm.io/gorm"
 
+	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/routes"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/stubs"
 )
 
 func main() {
@@ -71,10 +85,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer func() { _ = persistence.Close(db) }()
 
+	deps := buildDeps(db, redisOpt)
+
 	addr := envOrDefault("CSW_SERVER_ADDR", ":8080")
 	corsOrigins := splitNonEmpty(os.Getenv("CSW_SERVER_CORS_ORIGINS"))
-
-	readiness := readinessProbe{db: db, redisOpt: redisOpt}
 
 	srv := httpapi.NewServer(httpapi.Config{
 		Addr:         addr,
@@ -82,9 +96,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		Logger:       logger,
-	}, httpapi.Deps{
-		Health: routes.HealthDeps{Readiness: readiness},
-	})
+	}, deps)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -107,6 +119,54 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Warn("server shutdown", "err", err)
 	}
 	return nil
+}
+
+// buildDeps assembles the full httpapi.Deps tree: repositories from
+// the Postgres handle, a dispatcher on the Redis handle, and the
+// application use cases that bind them. SourceGateway / ChainHead
+// are stubs; ReplayDiff still registers so the route map is complete
+// — operators see the "chain head not configured" signal rather
+// than a 404.
+func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt) httpapi.Deps {
+	runs := persistence.NewRunRepo(db)
+	diffs := persistence.NewDiffRepo(db)
+	schedules := persistence.NewScheduleRepo(db)
+
+	clock := stubs.SystemClock{}
+	dispatcher := queue.NewDispatcher(redisOpt, schedules)
+	gateway := stubs.NullGateway{}
+	policy := diff.DefaultPolicy{}
+
+	schedule := &application.ScheduleRun{Runs: runs, Dispatcher: dispatcher, Clock: clock}
+	cancel := &application.CancelRun{Runs: runs, Clock: clock}
+	replay := &application.ReplayDiff{
+		Diffs:     diffs,
+		Sources:   gateway,
+		Clock:     clock,
+		Policy:    policy,
+		Tolerance: application.DefaultToleranceResolver{},
+	}
+
+	readiness := readinessProbe{db: db, redisOpt: redisOpt}
+
+	return httpapi.Deps{
+		Health: routes.HealthDeps{Readiness: readiness},
+		Runs: routes.RunsDeps{
+			Schedule: schedule,
+			Query:    application.QueryRuns{Runs: runs},
+			Cancel:   cancel,
+		},
+		Diffs: routes.DiffsDeps{
+			Query:  application.QueryDiffs{Diffs: diffs},
+			Replay: replay,
+		},
+		Schedules: routes.SchedulesDeps{
+			Schedule:   schedule,
+			Query:      application.QuerySchedules{Schedules: schedules},
+			Dispatcher: dispatcher,
+		},
+		Sources: routes.SourcesDeps{Gateway: gateway},
+	}
 }
 
 // readinessProbe combines a Postgres ping and a Redis ping. Either

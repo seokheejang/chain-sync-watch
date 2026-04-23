@@ -7,6 +7,8 @@
     "allow": [
       "Bash(go *)",
       "Bash(gofumpt *)",
+      "Bash(gofmt -l *)",
+      "Bash(gofmt -d *)",
       "Bash(golangci-lint *)",
       "Bash(goimports *)",
       "Bash(make *)",
