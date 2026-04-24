@@ -17,6 +17,7 @@ import (
 	"github.com/seokheejang/chain-sync-watch/internal/chain"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/dto"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/routes"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/stubs"
 	"github.com/seokheejang/chain-sync-watch/internal/verification"
@@ -126,7 +127,18 @@ func specDeps() httpapi.Deps {
 			Repo:    sources,
 			Gateway: gateway,
 			Clock:   clock,
+			Types:   []string{"blockscout", "routescan", "rpc"},
 		},
+		Chains: routes.ChainsDeps{Catalog: stubChainCatalog()},
+	}
+}
+
+// stubChainCatalog hands the /chains handler a representative entry
+// so the dumped OpenAPI spec exercises the response shape. The
+// live server replaces this with the config-loaded catalog.
+func stubChainCatalog() []dto.ChainView {
+	return []dto.ChainView{
+		{ID: 10, Slug: "optimism", DisplayName: "Optimism"},
 	}
 }
 

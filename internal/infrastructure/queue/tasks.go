@@ -9,8 +9,9 @@ import (
 // queued job, so changing them would orphan in-flight tasks on
 // running deployments. Add new constants here rather than renaming.
 const (
-	TaskTypeExecuteRun   = "verification:execute_run"
-	TaskTypeScheduledRun = "verification:scheduled_run"
+	TaskTypeExecuteRun        = "verification:execute_run"
+	TaskTypeScheduledRun      = "verification:scheduled_run"
+	TaskTypePruneOldRuns      = "maintenance:prune_old_runs"
 )
 
 // Queue names. Tier-aware weights land in Phase 7D; for now every
@@ -98,6 +99,36 @@ func UnmarshalScheduledRunPayload(data []byte) (ScheduledRunPayload, error) {
 	}
 	if len(p.MetricKeys) == 0 {
 		return ScheduledRunPayload{}, fmt.Errorf("queue: scheduled_run payload missing metric_keys")
+	}
+	return p, nil
+}
+
+// PruneOldRunsPayload is the body for the retention sweep. Days is
+// the age threshold: runs with finished_at older than that get
+// deleted (CASCADE cleans discrepancies).
+type PruneOldRunsPayload struct {
+	Days int `json:"days"`
+}
+
+// Marshal serialises the payload.
+func (p PruneOldRunsPayload) Marshal() ([]byte, error) {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, fmt.Errorf("queue: marshal prune_old_runs payload: %w", err)
+	}
+	return b, nil
+}
+
+// UnmarshalPruneOldRunsPayload decodes the sweep payload and rejects
+// non-positive Days — a 0-day threshold would wipe every terminal
+// run and is almost certainly a config mistake.
+func UnmarshalPruneOldRunsPayload(data []byte) (PruneOldRunsPayload, error) {
+	var p PruneOldRunsPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return PruneOldRunsPayload{}, fmt.Errorf("queue: decode prune_old_runs payload: %w", err)
+	}
+	if p.Days <= 0 {
+		return PruneOldRunsPayload{}, fmt.Errorf("queue: prune_old_runs days must be > 0 (got %d)", p.Days)
 	}
 	return p, nil
 }

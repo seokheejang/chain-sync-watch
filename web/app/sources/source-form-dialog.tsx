@@ -43,6 +43,7 @@ export function SourceFormDialog({
   onOpenChange,
   mode,
   source,
+  defaultChainId,
   onSubmit,
   pending,
 }: {
@@ -50,13 +51,16 @@ export function SourceFormDialog({
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
   source?: SourceRow | null;
+  // defaultChainId is the sidebar-selected chain on create. Edit mode
+  // ignores it — the dialog prefills from the row.
+  defaultChainId?: number;
   onSubmit: (values: SourceFormValues) => void;
   pending?: boolean;
 }) {
   const form = useForm<SourceFormValues>({
     defaultValues: {
       type: "rpc",
-      chain_id: 10,
+      chain_id: defaultChainId ?? 10,
       endpoint: "",
       api_key: "",
       archive: false,
@@ -89,7 +93,7 @@ export function SourceFormDialog({
     } else {
       form.reset({
         type: "rpc",
-        chain_id: 10,
+        chain_id: defaultChainId ?? 10,
         endpoint: "",
         api_key: "",
         archive: false,
@@ -97,7 +101,7 @@ export function SourceFormDialog({
         clear_secret: false,
       });
     }
-  }, [open, mode, source, form]);
+  }, [open, mode, source, defaultChainId, form]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -134,7 +138,10 @@ export function SourceFormDialog({
                 id="chain_id"
                 type="number"
                 min={1}
-                disabled={mode === "edit"}
+                // Disabled on both modes: create uses the
+                // sidebar-selected chain (defaultChainId), edit locks
+                // the row's natural key.
+                disabled
                 {...form.register("chain_id", { valueAsNumber: true })}
               />
             </div>

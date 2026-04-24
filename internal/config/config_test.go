@@ -49,10 +49,14 @@ func TestLoad_DefaultsOnly(t *testing.T) {
 	require.Equal(t, "info", cfg.Log.Level)
 	require.Equal(t, "json", cfg.Log.Format)
 
-	require.Len(t, cfg.Chains, 1)
-	require.Equal(t, uint64(10), cfg.Chains[0].ID)
-	require.Equal(t, "optimism", cfg.Chains[0].Slug)
-	require.Equal(t, "Optimism", cfg.Chains[0].DisplayName)
+	// Embedded catalog ships with the 5 MVP chains (Ethereum, Optimism,
+	// Base, Arbitrum, Sepolia). Only the anchor entry is asserted in
+	// detail — the rest are validated by Config.Validate() duplicate
+	// checks at load time.
+	require.Len(t, cfg.Chains, 5)
+	require.Equal(t, uint64(1), cfg.Chains[0].ID)
+	require.Equal(t, "ethereum", cfg.Chains[0].Slug)
+	require.Equal(t, "Ethereum", cfg.Chains[0].DisplayName)
 
 	require.True(t, cfg.Adapters.RPC.Enabled)
 	require.Equal(t, "https://optimism-rpc.publicnode.com", cfg.Adapters.RPC.Endpoints[10])
@@ -99,7 +103,7 @@ adapters:
 	// Non-overridden keys should keep defaults.
 	require.Equal(t, "json", cfg.Log.Format)
 	require.Equal(t, 10*time.Second, cfg.Server.ReadTimeout)
-	require.Len(t, cfg.Chains, 1)
+	require.Len(t, cfg.Chains, 5)
 }
 
 func TestLoad_EnvOverridesLocal(t *testing.T) {

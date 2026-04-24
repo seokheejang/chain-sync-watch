@@ -51,6 +51,7 @@ type Config struct {
 	Adapters     AdaptersConfig     `koanf:"adapters"`
 	Verification VerificationConfig `koanf:"verification"`
 	RawResponse  RawResponseConfig  `koanf:"raw_response"`
+	Retention    RetentionConfig    `koanf:"retention"`
 }
 
 type ServerConfig struct {
@@ -120,6 +121,14 @@ type VerificationConfig struct {
 
 type RawResponseConfig struct {
 	Persist bool `koanf:"persist"`
+}
+
+// RetentionConfig controls the worker's housekeeping sweep. RunsDays
+// is the age threshold (0 = disable the sweep); CronExpr is the 5-
+// field asynq spec that fires the maintenance task.
+type RetentionConfig struct {
+	RunsDays int    `koanf:"runs_days"`
+	CronExpr string `koanf:"cron_expr"`
 }
 
 // Options tunes how Load resolves configuration. Nil uses production

@@ -37,9 +37,21 @@ log:
   format: json       # json | text
 
 chains:
+  - id: 1
+    slug: ethereum
+    display_name: "Ethereum"
   - id: 10
     slug: optimism
     display_name: "Optimism"
+  - id: 8453
+    slug: base
+    display_name: "Base"
+  - id: 42161
+    slug: arbitrum
+    display_name: "Arbitrum"
+  - id: 11155111
+    slug: sepolia
+    display_name: "Sepolia"
 
 # Bundled source adapters. Each is independently enabled. Disabled
 # adapters are skipped in the server wiring (cmd/csw-server/main.go).
@@ -72,6 +84,14 @@ adapters:
 verification:
   max_concurrent_per_source: 5
   default_timeout: 30s
+
+# Retention — housekeeping sweep run by the worker's scheduler. Deletes
+# terminal runs (and, via CASCADE, their discrepancies) whose
+# finished_at is older than runs_days. cron_expr follows the same
+# 5-field asynq spec as scheduled runs; "0 3 * * *" = daily at 03:00.
+retention:
+  runs_days: 14
+  cron_expr: "0 3 * * *"
 
 # Persist raw adapter responses alongside each discrepancy (audit/debug).
 # Off by default to save storage and limit incidental data retention.

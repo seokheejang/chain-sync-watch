@@ -33,6 +33,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/config"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/gateway"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
@@ -59,6 +60,11 @@ func mainRun() int {
 }
 
 func run(ctx context.Context, logger *slog.Logger) error {
+	cfg, err := config.Load(nil)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
 		return errors.New("REDIS_URL env var is required")
@@ -99,7 +105,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}
 
 	clock := stubs.SystemClock{}
-	dispatcher := queue.NewDispatcher(redisOpt, schedules)
+	dispatcher := queue.NewDispatcher(redisOpt, schedules).WithRetention(queue.RetentionSchedule{
+		CronExpr: cfg.Retention.CronExpr,
+		Days:     cfg.Retention.RunsDays,
+	})
 	defer func() { _ = dispatcher.Close() }()
 
 	// registerPrivateAdapters is a no-op in default builds; the
@@ -127,6 +136,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		Runs:       runs,
 		Enqueuer:   dispatcher,
 		Clock:      clock,
+		Pruner:     runs,
 		Logger:     logger,
 	}
 	mux := asynq.NewServeMux()

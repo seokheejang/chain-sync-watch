@@ -375,19 +375,48 @@ type CreateRunResponse struct {
 
 // RunView is the canonical GET representation of a Run. The shape
 // is stable across GET /runs/{id} and the list endpoint's entries.
+//
+// Summary is the execution audit — what the run actually looked at.
+// Populated by ExecuteRun's summaryAccumulator and sealed onto the
+// aggregate immediately before Complete. Runs that never entered
+// the running state (pending, cancelled early, legacy rows) carry
+// a zero-value summary.
 type RunView struct {
-	ID               string     `json:"id"`
-	ChainID          uint64     `json:"chain_id"`
-	Status           string     `json:"status"`
-	StrategyKind     string     `json:"strategy_kind"`
-	Metrics          []string   `json:"metrics"`
-	TriggerKind      string     `json:"trigger_kind"`
-	AddressPlanKinds []string   `json:"address_plan_kinds,omitempty"`
-	TokenPlanKinds   []string   `json:"token_plan_kinds,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
-	ErrorMessage     string     `json:"error_message,omitempty"`
+	ID               string        `json:"id"`
+	ChainID          uint64        `json:"chain_id"`
+	Status           string        `json:"status"`
+	StrategyKind     string        `json:"strategy_kind"`
+	Metrics          []string      `json:"metrics"`
+	TriggerKind      string        `json:"trigger_kind"`
+	AddressPlanKinds []string      `json:"address_plan_kinds,omitempty"`
+	TokenPlanKinds   []string      `json:"token_plan_kinds,omitempty"`
+	CreatedAt        time.Time     `json:"created_at"`
+	StartedAt        *time.Time    `json:"started_at,omitempty"`
+	FinishedAt       *time.Time    `json:"finished_at,omitempty"`
+	ErrorMessage     string        `json:"error_message,omitempty"`
+	Summary          *RunSummaryIn `json:"summary,omitempty" doc:"What the run actually compared; absent for runs that never executed"`
+}
+
+// RunSummaryIn is the wire shape of verification.RunSummary. The
+// frontend uses it to render the Run detail Overview without
+// persisting comparison rows — the fields here are all the run-level
+// audit data the domain keeps.
+type RunSummaryIn struct {
+	AnchorBlock      *uint64      `json:"anchor_block,omitempty" doc:"Tip resolved at run start; nil for Snapshot-only runs"`
+	Subjects         []SubjectOut `json:"subjects"`
+	SourcesUsed      []string     `json:"sources_used"`
+	ComparisonsCount int          `json:"comparisons_count" doc:"Total (subject × metric) comparisons attempted"`
+}
+
+// SubjectOut mirrors verification.Subject with short JSON keys so
+// the JSONB-backed list doesn't bloat the wire payload. Clients key
+// on Kind to read the remaining fields.
+type SubjectOut struct {
+	Kind    string  `json:"k" enum:"block,address_latest,address_at_block,erc20_balance,erc20_holdings,snapshot"`
+	Block   *uint64 `json:"b,omitempty"`
+	Address *string `json:"a,omitempty"`
+	Token   *string `json:"t,omitempty"`
+	Name    string  `json:"n,omitempty" doc:"Snapshot metric key (snapshot kind only)"`
 }
 
 // ToRunView renders the domain aggregate into the wire shape.
@@ -413,7 +442,7 @@ func ToRunView(r *verification.Run) RunView {
 			tkinds[i] = p.Kind()
 		}
 	}
-	return RunView{
+	view := RunView{
 		ID:               string(r.ID()),
 		ChainID:          uint64(r.ChainID()),
 		Status:           string(r.Status()),
@@ -427,6 +456,42 @@ func ToRunView(r *verification.Run) RunView {
 		FinishedAt:       r.FinishedAt(),
 		ErrorMessage:     r.ErrorMessage(),
 	}
+	if s := r.Summary(); !s.IsZero() {
+		view.Summary = summaryToWire(s)
+	}
+	return view
+}
+
+// summaryToWire projects the domain RunSummary into its DTO shape.
+// Address / Token are rendered as 0x-prefixed hex strings rather
+// than raw bytes so frontend displays don't have to decode.
+func summaryToWire(s verification.RunSummary) *RunSummaryIn {
+	out := &RunSummaryIn{
+		ComparisonsCount: s.ComparisonsCount,
+		SourcesUsed:      append([]string{}, s.SourcesUsed...),
+		Subjects:         make([]SubjectOut, len(s.Subjects)),
+	}
+	if s.AnchorBlock != nil {
+		ab := s.AnchorBlock.Uint64()
+		out.AnchorBlock = &ab
+	}
+	for i, subj := range s.Subjects {
+		entry := SubjectOut{Kind: string(subj.Kind), Name: subj.Name}
+		if subj.Block != nil {
+			b := subj.Block.Uint64()
+			entry.Block = &b
+		}
+		if subj.Address != nil {
+			a := subj.Address.Hex()
+			entry.Address = &a
+		}
+		if subj.Token != nil {
+			t := subj.Token.Hex()
+			entry.Token = &t
+		}
+		out.Subjects[i] = entry
+	}
+	return out
 }
 
 // ListRunsResponse is the paginated GET /runs body.

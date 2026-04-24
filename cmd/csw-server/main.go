@@ -38,9 +38,11 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/seokheejang/chain-sync-watch/internal/application"
+	"github.com/seokheejang/chain-sync-watch/internal/config"
 	"github.com/seokheejang/chain-sync-watch/internal/diff"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/gateway"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi"
+	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/dto"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/httpapi/routes"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/persistence"
 	"github.com/seokheejang/chain-sync-watch/internal/infrastructure/queue"
@@ -65,6 +67,11 @@ func mainRun() int {
 }
 
 func run(ctx context.Context, logger *slog.Logger) error {
+	cfg, err := config.Load(nil)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return errors.New("DATABASE_URL env var is required")
@@ -98,7 +105,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Warn("CSW_SECRET_KEY not set; source CRUD with api_keys will be rejected")
 	}
 
-	deps := buildDeps(db, redisOpt, cipher)
+	deps := buildDeps(db, redisOpt, cipher, cfg)
 
 	addr := envOrDefault("CSW_SERVER_ADDR", ":8080")
 	corsOrigins := splitNonEmpty(os.Getenv("CSW_SERVER_CORS_ORIGINS"))
@@ -139,7 +146,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 // SourceGateway + RPC ChainHead, and the application use cases
 // that bind them. Phase 10a completes the stubs → real-infra
 // transition started in Phase 10a.1–10a.7.
-func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher) httpapi.Deps {
+func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher, cfg *config.Config) httpapi.Deps {
 	runs := persistence.NewRunRepo(db)
 	diffs := persistence.NewDiffRepo(db)
 	schedules := persistence.NewScheduleRepo(db)
@@ -190,7 +197,23 @@ func buildDeps(db *gorm.DB, redisOpt asynq.RedisConnOpt, cipher *secrets.Cipher)
 			Clock:   clock,
 			Types:   registryKeys(reg),
 		},
+		Chains: routes.ChainsDeps{Catalog: chainCatalog(cfg)},
 	}
+}
+
+// chainCatalog projects config.ChainConfig entries into the wire DTO
+// the /chains endpoint serves. Stays next to buildDeps so the one
+// place that knows both shapes is the wiring layer.
+func chainCatalog(cfg *config.Config) []dto.ChainView {
+	out := make([]dto.ChainView, len(cfg.Chains))
+	for i, c := range cfg.Chains {
+		out[i] = dto.ChainView{
+			ID:          c.ID,
+			Slug:        c.Slug,
+			DisplayName: c.DisplayName,
+		}
+	}
+	return out
 }
 
 // readinessProbe combines a Postgres ping and a Redis ping. Either

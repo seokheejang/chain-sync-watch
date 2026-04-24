@@ -30,6 +30,23 @@ type runModel struct {
 	CreatedAt    time.Time      `gorm:"column:created_at;not null"`
 	StartedAt    *time.Time     `gorm:"column:started_at"`
 	FinishedAt   *time.Time     `gorm:"column:finished_at"`
+	// Summary fields (migration 008). AnchorBlock is nullable
+	// (Snapshot-only runs have no tip anchor). Subjects is a JSONB
+	// array of tagged envelopes; see serialize.go / marshalSubjects.
+	// SourcesUsed snapshots the participating source IDs so later
+	// edits to the sources table don't mutate the historical row.
+	//
+	// No gorm `default:` tag here even though the DB has one.
+	// gorm's "skip zero value on INSERT" logic mis-fires when the
+	// current value matches the default literal ("[]"), causing an
+	// UPSERT with UpdateAll to leave the column at its DB default
+	// — the non-empty summary written by ExecuteRun would be lost.
+	// The migration still enforces a column-level DEFAULT so rows
+	// predating the summary feature round-trip cleanly.
+	AnchorBlock      *int64         `gorm:"column:anchor_block"`
+	Subjects         []byte         `gorm:"column:subjects;type:jsonb;not null"`
+	SourcesUsed      pq.StringArray `gorm:"column:sources_used;type:text[];not null"`
+	ComparisonsCount int            `gorm:"column:comparisons_count;not null"`
 }
 
 // TableName pins the table name so gorm's default pluraliser does

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -28,6 +29,12 @@ type ExecuteRunUseCase interface {
 // CancelScheduled too.
 type RunEnqueuer interface {
 	EnqueueRunExecution(ctx context.Context, runID verification.RunID) error
+}
+
+// RunPruner is the narrow port the retention handler consumes.
+// persistence.RunRepo.PruneFinishedBefore satisfies it.
+type RunPruner interface {
+	PruneFinishedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // Handlers bridges asynq tasks to application use cases.
@@ -56,6 +63,11 @@ type Handlers struct {
 	Enqueuer RunEnqueuer
 	Clock    application.Clock
 
+	// Pruner is required only when the worker processes
+	// TaskTypePruneOldRuns. A nil Pruner surfaces as a handler error
+	// on the first fire so operators see the wiring problem in logs.
+	Pruner RunPruner
+
 	Logger *slog.Logger
 }
 
@@ -64,6 +76,7 @@ type Handlers struct {
 func (h *Handlers) Register(mux *asynq.ServeMux) {
 	mux.HandleFunc(TaskTypeExecuteRun, h.HandleExecuteRun)
 	mux.HandleFunc(TaskTypeScheduledRun, h.HandleScheduledRun)
+	mux.HandleFunc(TaskTypePruneOldRuns, h.HandlePruneOldRuns)
 }
 
 // HandleExecuteRun processes a one-off ExecuteRun task.
@@ -184,6 +197,42 @@ func (h *Handlers) HandleScheduledRun(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("scheduled_run: enqueue execute: %w", err)
 	}
 
+	return nil
+}
+
+// HandlePruneOldRuns reclaims storage by deleting terminal runs
+// whose finished_at predates (now - Days). Discrepancies tied to the
+// deleted rows CASCADE per the migration 001 FK.
+//
+// Classification:
+//
+//   - Payload decode errors (including Days <= 0) → SkipRetry.
+//     Misconfigured retention windows are permanent until the operator
+//     redeploys with a corrected config.
+//   - Missing Pruner / Clock → transient error, no SkipRetry. A
+//     worker that started with incomplete wiring can be fixed by a
+//     rolling restart; the next fire picks up the config.
+//   - DB errors → propagated as-is so asynq's MaxRetry covers
+//     transient Postgres blips.
+func (h *Handlers) HandlePruneOldRuns(ctx context.Context, t *asynq.Task) error {
+	p, err := UnmarshalPruneOldRunsPayload(t.Payload())
+	if err != nil {
+		h.logWarn("prune_old_runs decode", "err", err)
+		return fmt.Errorf("%w: %w", err, asynq.SkipRetry)
+	}
+	if h.Pruner == nil || h.Clock == nil {
+		h.logWarn("prune_old_runs: handler missing Pruner/Clock wiring")
+		return errors.New("prune_old_runs: handler not fully wired")
+	}
+	cutoff := h.Clock.Now().AddDate(0, 0, -p.Days)
+	n, err := h.Pruner.PruneFinishedBefore(ctx, cutoff)
+	if err != nil {
+		h.logWarn("prune_old_runs: delete failed", "cutoff", cutoff, "err", err)
+		return fmt.Errorf("prune_old_runs: %w", err)
+	}
+	if h.Logger != nil {
+		h.Logger.Info("prune_old_runs: swept", "deleted", n, "cutoff", cutoff, "days", p.Days)
+	}
 	return nil
 }
 

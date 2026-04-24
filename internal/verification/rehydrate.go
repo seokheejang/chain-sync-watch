@@ -39,6 +39,7 @@ func Rehydrate(
 	errorMsg string,
 	addressPlans []AddressSamplingPlan,
 	tokenPlans []TokenSamplingPlan,
+	summary RunSummary,
 ) (*Run, error) {
 	if id == "" {
 		return nil, errors.New("rehydrate run: id is empty")
@@ -84,6 +85,24 @@ func Rehydrate(
 		finishedCopy = &t
 	}
 
+	// Persistence supplies an already-decoded RunSummary. Trust
+	// it — schema-level invariants are the mapper's responsibility.
+	// Defensive copy protects the mapper's caller from later
+	// aggregate mutations.
+	copiedSummary := RunSummary{ComparisonsCount: summary.ComparisonsCount}
+	if summary.AnchorBlock != nil {
+		b := *summary.AnchorBlock
+		copiedSummary.AnchorBlock = &b
+	}
+	if len(summary.Subjects) > 0 {
+		copiedSummary.Subjects = make([]Subject, len(summary.Subjects))
+		copy(copiedSummary.Subjects, summary.Subjects)
+	}
+	if len(summary.SourcesUsed) > 0 {
+		copiedSummary.SourcesUsed = make([]string, len(summary.SourcesUsed))
+		copy(copiedSummary.SourcesUsed, summary.SourcesUsed)
+	}
+
 	return &Run{
 		id:           id,
 		chainID:      cid,
@@ -97,5 +116,6 @@ func Rehydrate(
 		startedAt:    startedCopy,
 		finishedAt:   finishedCopy,
 		errorMsg:     errorMsg,
+		summary:      copiedSummary,
 	}, nil
 }

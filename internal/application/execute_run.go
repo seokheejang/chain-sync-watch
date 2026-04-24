@@ -134,6 +134,89 @@ type runContext struct {
 	resolver     ToleranceResolver
 	blocks       []chain.BlockNumber
 	anchor       chain.BlockNumber
+	// summary accumulates "what this run looked at" across every
+	// pass. Populated inline by the pass functions so Complete has
+	// a fully-built RunSummary to seal onto the aggregate.
+	summary *summaryAccumulator
+}
+
+// summaryAccumulator collects Subjects and comparison counts as the
+// run progresses. Not thread-safe — passes run sequentially per Run.
+// Kept next to runContext because they share a lifetime and neither
+// escapes Execute.
+type summaryAccumulator struct {
+	anchor      *chain.BlockNumber
+	sources     []string
+	subjects    []verification.Subject
+	comparisons int
+}
+
+func (a *summaryAccumulator) setSourcesFrom(ss []source.Source) {
+	ids := make([]string, len(ss))
+	for i, s := range ss {
+		ids[i] = string(s.ID())
+	}
+	a.sources = ids
+}
+
+func (a *summaryAccumulator) setAnchor(b chain.BlockNumber) {
+	ab := b
+	a.anchor = &ab
+}
+
+func (a *summaryAccumulator) addBlock(b chain.BlockNumber) {
+	bb := b
+	a.subjects = append(a.subjects, verification.Subject{
+		Kind:  verification.SubjectKindBlock,
+		Block: &bb,
+	})
+}
+
+func (a *summaryAccumulator) addAddressLatest(addr chain.Address) {
+	aa := addr
+	a.subjects = append(a.subjects, verification.Subject{
+		Kind:    verification.SubjectKindAddressLatest,
+		Address: &aa,
+	})
+}
+
+func (a *summaryAccumulator) addAddressAtBlock(addr chain.Address, b chain.BlockNumber) {
+	aa := addr
+	bb := b
+	a.subjects = append(a.subjects, verification.Subject{
+		Kind:    verification.SubjectKindAddressAtBlock,
+		Address: &aa,
+		Block:   &bb,
+	})
+}
+
+func (a *summaryAccumulator) addERC20Holdings(addr chain.Address) {
+	aa := addr
+	a.subjects = append(a.subjects, verification.Subject{
+		Kind:    verification.SubjectKindERC20Holdings,
+		Address: &aa,
+	})
+}
+
+func (a *summaryAccumulator) addERC20Balance(addr, token chain.Address) {
+	aa := addr
+	tt := token
+	a.subjects = append(a.subjects, verification.Subject{
+		Kind:    verification.SubjectKindERC20Balance,
+		Address: &aa,
+		Token:   &tt,
+	})
+}
+
+func (a *summaryAccumulator) addComparisons(n int) { a.comparisons += n }
+
+func (a *summaryAccumulator) build() verification.RunSummary {
+	return verification.RunSummary{
+		AnchorBlock:      a.anchor,
+		Subjects:         a.subjects,
+		SourcesUsed:      a.sources,
+		ComparisonsCount: a.comparisons,
+	}
 }
 
 // executeInner is the body of a successfully-started Run. Any
@@ -156,6 +239,10 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 		return fmt.Errorf("execute run: tip: %w", err)
 	}
 
+	acc := &summaryAccumulator{}
+	acc.setSourcesFrom(sources)
+	acc.setAnchor(anchor)
+
 	rc := runContext{
 		sources:      sources,
 		metrics:      run.Metrics(),
@@ -167,6 +254,7 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 			TipBlock: tip,
 			Now:      uc.Clock.Now(),
 		}),
+		summary: acc,
 	}
 
 	if err := uc.runBlockPass(ctx, run, rc); err != nil {
@@ -181,7 +269,17 @@ func (uc ExecuteRun) executeInner(ctx context.Context, run *verification.Run) er
 	if err := uc.runERC20HoldingsLatestPass(ctx, run, rc); err != nil {
 		return err
 	}
-	return uc.runERC20BalanceLatestPass(ctx, run, rc)
+	if err := uc.runERC20BalanceLatestPass(ctx, run, rc); err != nil {
+		return err
+	}
+
+	// Seal the summary onto the aggregate while still in Running —
+	// RecordSummary rejects terminal states. Errors here are soft:
+	// the aggregate falls back to a zero summary, which the UI
+	// renders as "no detail recorded" rather than failing the whole
+	// run for a bookkeeping mistake.
+	_ = run.RecordSummary(acc.build())
+	return nil
 }
 
 // runBlockPass iterates the Run's block sample and dispatches the
@@ -204,6 +302,10 @@ func (uc ExecuteRun) runBlockPass(ctx context.Context, run *verification.Run, rc
 			block, rc.anchor, "block", projectBlock)
 		if err != nil {
 			return err
+		}
+		if rc.summary != nil {
+			rc.summary.addBlock(block)
+			rc.summary.addComparisons(len(blockMetrics))
 		}
 	}
 	return nil
@@ -244,6 +346,10 @@ func (uc ExecuteRun) runAddressLatestPass(ctx context.Context, run *verification
 		if err := compareAndSave(ctx, uc, run, rc.resolver, addressMetrics, results,
 			subj, rc.anchor, rc.anchor, "address", projectAddressLatest); err != nil {
 			return err
+		}
+		if rc.summary != nil {
+			rc.summary.addAddressLatest(a)
+			rc.summary.addComparisons(len(addressMetrics))
 		}
 	}
 	return nil
@@ -292,6 +398,10 @@ func (uc ExecuteRun) runAddressAtBlockPass(ctx context.Context, run *verificatio
 				subj, b, rc.anchor, "address-at-block", projectAddressAtBlock); err != nil {
 				return err
 			}
+			if rc.summary != nil {
+				rc.summary.addAddressAtBlock(a, b)
+				rc.summary.addComparisons(len(addressMetrics))
+			}
 		}
 	}
 	return nil
@@ -333,6 +443,10 @@ func (uc ExecuteRun) runERC20HoldingsLatestPass(ctx context.Context, run *verifi
 		if err := compareAndSave(ctx, uc, run, rc.resolver, metrics, results,
 			subj, rc.anchor, rc.anchor, "erc20-holdings", projectERC20Holdings); err != nil {
 			return err
+		}
+		if rc.summary != nil {
+			rc.summary.addERC20Holdings(a)
+			rc.summary.addComparisons(len(metrics))
 		}
 	}
 	return nil
@@ -395,6 +509,10 @@ func (uc ExecuteRun) runERC20BalanceLatestPass(ctx context.Context, run *verific
 			if err := compareAndSave(ctx, uc, run, rc.resolver, metrics, results,
 				subj, rc.anchor, rc.anchor, "erc20-balance", projectERC20Balance); err != nil {
 				return err
+			}
+			if rc.summary != nil {
+				rc.summary.addERC20Balance(a, t)
+				rc.summary.addComparisons(len(metrics))
 			}
 		}
 	}

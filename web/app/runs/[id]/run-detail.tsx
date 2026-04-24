@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { Schemas } from "@/lib/api/client";
 import { useCancelRun, useRun, useRunDiffs, useSources } from "@/lib/api/hooks";
 import { chainLabel } from "@/lib/chains";
 
@@ -97,6 +98,8 @@ export function RunDetail({ id }: { id: string }) {
           ) : null}
         </div>
       </div>
+
+      {r.summary ? <SummaryCard summary={r.summary} /> : null}
 
       <Tabs defaultValue="diffs">
         <TabsList>
@@ -273,10 +276,177 @@ export function RunDetail({ id }: { id: string }) {
               </p>
             </CardContent>
           </Card>
+
+          {r.summary ? <SubjectsCard summary={r.summary} /> : null}
         </TabsContent>
       </Tabs>
     </div>
   );
+}
+
+// SummaryCard sits above the tabs so the "what did this run look at"
+// answer is visible regardless of whether the operator is on the
+// Discrepancies tab or the Details tab.
+function SummaryCard({ summary }: { summary: Schemas["RunSummaryIn"] }) {
+  const counts = tallySubjects(summary.subjects ?? []);
+  const countsLabel =
+    Object.keys(counts).length === 0
+      ? "0 subjects"
+      : Object.entries(counts)
+          .map(([k, n]) => `${n} ${kindLabel(k, n)}`)
+          .join(", ");
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Execution summary</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3 text-sm sm:grid-cols-4">
+        <Field
+          label="Anchor block"
+          value={
+            summary.anchor_block ? <code className="font-mono">#{summary.anchor_block}</code> : "—"
+          }
+        />
+        <Field label="Comparisons" value={summary.comparisons_count} />
+        <Field
+          label="Sources"
+          value={
+            <div className="flex flex-wrap gap-1">
+              {(summary.sources_used ?? []).length === 0 ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                (summary.sources_used ?? []).map((s) => (
+                  <Badge key={s} variant="outline" className="font-mono text-xs">
+                    {s}
+                  </Badge>
+                ))
+              )}
+            </div>
+          }
+        />
+        <Field label="Subjects" value={countsLabel} />
+      </CardContent>
+    </Card>
+  );
+}
+
+// SubjectsCard renders the full subject list grouped by kind. Log-
+// style readout so operators can answer "exactly which blocks /
+// addresses / tokens were verified?" at a glance, per the MVP
+// audit-trail requirement (runs.subjects JSONB).
+function SubjectsCard({ summary }: { summary: Schemas["RunSummaryIn"] }) {
+  const groups = groupSubjects(summary.subjects ?? []);
+  const kinds = Object.keys(groups);
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>Subjects compared</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {kinds.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No subjects recorded for this run. Legacy rows (predating the summary column) render
+            empty.
+          </p>
+        ) : (
+          kinds.map((kind) => (
+            <div key={kind} className="space-y-1">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {kindLabel(kind, groups[kind].length)} ({groups[kind].length})
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {groups[kind].map((s) => (
+                  <code
+                    key={subjectKey(s)}
+                    className="rounded bg-muted px-2 py-0.5 font-mono text-xs"
+                  >
+                    {renderSubject(s)}
+                  </code>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// tallySubjects returns a kind → count histogram. Used in the
+// SummaryCard header line to summarise the full subject mix in one
+// sentence without dumping every entry.
+function tallySubjects(subjects: Schemas["SubjectOut"][]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of subjects) {
+    out[s.k] = (out[s.k] ?? 0) + 1;
+  }
+  return out;
+}
+
+// groupSubjects buckets by kind, preserving insertion order so the
+// log renders in the order the Run executed (block pass first, then
+// address, etc.).
+function groupSubjects(subjects: Schemas["SubjectOut"][]): Record<string, Schemas["SubjectOut"][]> {
+  const out: Record<string, Schemas["SubjectOut"][]> = {};
+  for (const s of subjects) {
+    if (!out[s.k]) out[s.k] = [];
+    out[s.k].push(s);
+  }
+  return out;
+}
+
+// kindLabel renders the backend kind slug into a pluralisable human
+// word. Singular/plural chosen by count so "1 block, 2 addresses"
+// reads naturally.
+function kindLabel(kind: string, count: number): string {
+  const plural = count !== 1;
+  switch (kind) {
+    case "block":
+      return plural ? "blocks" : "block";
+    case "address_latest":
+      return plural ? "addresses @latest" : "address @latest";
+    case "address_at_block":
+      return plural ? "address × block pairs" : "address × block pair";
+    case "erc20_balance":
+      return plural ? "erc20 balances" : "erc20 balance";
+    case "erc20_holdings":
+      return plural ? "erc20 holdings" : "erc20 holding";
+    case "snapshot":
+      return plural ? "snapshots" : "snapshot";
+    default:
+      return kind;
+  }
+}
+
+// subjectKey joins the kind-discriminated fields into a stable React
+// key. Duplicates within one Run are theoretically possible (same
+// subject compared twice) but never happen in practice — the engine
+// de-dupes plans before fan-out.
+function subjectKey(s: Schemas["SubjectOut"]): string {
+  return `${s.k}|${s.b ?? ""}|${s.a ?? ""}|${s.t ?? ""}|${s.n ?? ""}`;
+}
+
+// renderSubject formats one Subject into a readable log line. Short
+// hex addresses (first 6 + last 4 chars) keep the chip density
+// manageable when a run samples dozens of addresses.
+function renderSubject(s: Schemas["SubjectOut"]): string {
+  const short = (v: string) => (v.length > 12 ? `${v.slice(0, 6)}…${v.slice(-4)}` : v);
+  switch (s.k) {
+    case "block":
+      return `#${s.b}`;
+    case "address_latest":
+      return short(s.a ?? "");
+    case "address_at_block":
+      return `${short(s.a ?? "")}@#${s.b}`;
+    case "erc20_balance":
+      return `${short(s.a ?? "")} / ${short(s.t ?? "")}`;
+    case "erc20_holdings":
+      return short(s.a ?? "");
+    case "snapshot":
+      return s.n || "snapshot";
+    default:
+      return s.k;
+  }
 }
 
 // AllAgreedEmpty renders the "0 discrepancies" state as a success

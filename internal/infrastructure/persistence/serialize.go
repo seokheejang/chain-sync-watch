@@ -428,6 +428,65 @@ func unmarshalTokenPlan(kind string, data []byte) (verification.TokenSamplingPla
 	return nil, fmt.Errorf("persistence: unknown token plan kind %q", kind)
 }
 
+// --- Subject serialisation ---------------------------------------
+//
+// runs.subjects is a JSONB array of tagged single-object envelopes.
+// Short keys ("k","b","a","t","n") keep the payload compact since
+// rows accumulate one entry per comparison subject — a schedule that
+// runs every 5 minutes with latest_n=3 writes ~900 envelopes per day
+// per Run kind. The wire format is append-only: new kinds slot in as
+// additional cases, old kinds keep their original keys forever.
+
+type subjectJSON struct {
+	Kind    string             `json:"k"`
+	Block   *chain.BlockNumber `json:"b,omitempty"`
+	Address *chain.Address     `json:"a,omitempty"`
+	Token   *chain.Address     `json:"t,omitempty"`
+	Name    string             `json:"n,omitempty"`
+}
+
+func marshalSubjects(subjects []verification.Subject) ([]byte, error) {
+	if len(subjects) == 0 {
+		return []byte("[]"), nil
+	}
+	out := make([]subjectJSON, len(subjects))
+	for i, s := range subjects {
+		out[i] = subjectJSON{
+			Kind:    string(s.Kind),
+			Block:   s.Block,
+			Address: s.Address,
+			Token:   s.Token,
+			Name:    s.Name,
+		}
+	}
+	return json.Marshal(out)
+}
+
+func unmarshalSubjects(data []byte) ([]verification.Subject, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	trimmed := string(data)
+	if trimmed == "null" || trimmed == "[]" {
+		return nil, nil
+	}
+	var raw []subjectJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("persistence: decode subjects: %w", err)
+	}
+	out := make([]verification.Subject, len(raw))
+	for i, r := range raw {
+		out[i] = verification.Subject{
+			Kind:    verification.SubjectKind(r.Kind),
+			Block:   r.Block,
+			Address: r.Address,
+			Token:   r.Token,
+			Name:    r.Name,
+		}
+	}
+	return out, nil
+}
+
 // --- ValueSnapshot serialisation ----------------------------------
 
 type valueSnapshotJSON struct {

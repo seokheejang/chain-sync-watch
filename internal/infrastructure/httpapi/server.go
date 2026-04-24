@@ -43,6 +43,7 @@ type Deps struct {
 	Diffs     routes.DiffsDeps
 	Schedules routes.SchedulesDeps
 	Sources   routes.SourcesDeps
+	Chains    routes.ChainsDeps
 }
 
 // NewServer constructs a ready-to-Serve *http.Server. The server
@@ -103,5 +104,6 @@ func mountAPI(r chi.Router, deps Deps) huma.API {
 	routes.RegisterDiffs(api, deps.Diffs)
 	routes.RegisterSchedules(api, deps.Schedules)
 	routes.RegisterSources(api, deps.Sources)
+	routes.RegisterChains(api, deps.Chains)
 	return api
 }

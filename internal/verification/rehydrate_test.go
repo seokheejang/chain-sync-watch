@@ -28,6 +28,7 @@ func TestRehydrate_PreservesTerminalStateAndTimestamps(t *testing.T) {
 		"",
 		nil,
 		nil,
+		verification.RunSummary{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, verification.StatusCompleted, r.Status())
@@ -61,7 +62,7 @@ func TestRehydrate_RejectsStructuralErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := verification.Rehydrate(tc.id, tc.cid, tc.strategy, tc.metrics, tc.trigger, tc.status, base, nil, nil, "", nil, nil)
+			_, err := verification.Rehydrate(tc.id, tc.cid, tc.strategy, tc.metrics, tc.trigger, tc.status, base, nil, nil, "", nil, nil, verification.RunSummary{})
 			require.Error(t, err)
 		})
 	}
@@ -85,6 +86,7 @@ func TestRehydrate_CopiesTimestampsDefensively(t *testing.T) {
 		"",
 		nil,
 		nil,
+		verification.RunSummary{},
 	)
 	require.NoError(t, err)
 	// Mutating caller's variables must not reach the aggregate.

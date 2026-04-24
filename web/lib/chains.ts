@@ -1,22 +1,23 @@
-// chainName renders a human label for a numeric chain id. Mirrors
-// the display names in internal/config/defaults.yaml `chains:` so
-// the UI stays in sync without a round-trip to fetch the catalogue.
-// Unknown ids fall back to "Chain <id>" rather than throwing —
-// operators adding new chains should see them listed right away
-// even before this map is updated.
-const CHAIN_LABELS: Record<number, string> = {
-  10: "Optimism",
+// Fallback chain labels used when the /chains API is unreachable or
+// has not loaded yet. Keep the list short — the authoritative
+// catalog lives in internal/config/defaults.yaml and is served via
+// GET /chains. Unknown ids render as "Chain <id>".
+const FALLBACK_LABELS: Record<number, string> = {
   1: "Ethereum",
+  10: "Optimism",
+  8453: "Base",
+  42161: "Arbitrum",
+  11155111: "Sepolia",
 };
 
 export function chainName(id: number): string {
-  return CHAIN_LABELS[id] ?? `Chain ${id}`;
+  return FALLBACK_LABELS[id] ?? `Chain ${id}`;
 }
 
 // chainLabel renders "<name> (id)" for tables and detail headers
 // where both pieces of information are useful.
 export function chainLabel(id: number): string {
-  const name = CHAIN_LABELS[id];
+  const name = FALLBACK_LABELS[id];
   if (!name) return `Chain ${id}`;
   return `${name} (${id})`;
 }

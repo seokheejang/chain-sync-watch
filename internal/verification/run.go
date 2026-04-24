@@ -93,6 +93,10 @@ type Run struct {
 	startedAt    *time.Time
 	finishedAt   *time.Time
 	errorMsg     string
+	// summary is populated by ExecuteRun during the Running phase so
+	// the completed Run carries a record of which subjects were
+	// actually compared. Zero value = "nothing recorded yet".
+	summary RunSummary
 }
 
 // NewRun constructs a Run in the pending state after validating the
@@ -308,5 +312,57 @@ func (r *Run) Cancel(now time.Time) error {
 	}
 	r.status = StatusCancelled
 	r.finishedAt = &now
+	return nil
+}
+
+// Summary returns the recorded execution summary. Zero value means
+// no summary was ever recorded (legacy rows, pending/running runs).
+func (r *Run) Summary() RunSummary {
+	// Defensive copy — slices/pointers are held internally so a
+	// caller that mutates the returned value can't poke aggregate
+	// state.
+	out := RunSummary{ComparisonsCount: r.summary.ComparisonsCount}
+	if r.summary.AnchorBlock != nil {
+		b := *r.summary.AnchorBlock
+		out.AnchorBlock = &b
+	}
+	if len(r.summary.Subjects) > 0 {
+		out.Subjects = make([]Subject, len(r.summary.Subjects))
+		copy(out.Subjects, r.summary.Subjects)
+	}
+	if len(r.summary.SourcesUsed) > 0 {
+		out.SourcesUsed = make([]string, len(r.summary.SourcesUsed))
+		copy(out.SourcesUsed, r.summary.SourcesUsed)
+	}
+	return out
+}
+
+// RecordSummary stores the execution summary on the aggregate.
+// Accepted only while the Run is Running — once terminal, the record
+// is sealed. ExecuteRun calls this immediately before Complete.
+//
+// The passed-in summary is defensively copied so later mutations by
+// the application layer cannot leak into the aggregate.
+func (r *Run) RecordSummary(s RunSummary) error {
+	if r.status != StatusRunning {
+		return fmt.Errorf("run: cannot record summary from status %q", r.status)
+	}
+	if err := s.Validate(); err != nil {
+		return fmt.Errorf("run: record summary: %w", err)
+	}
+	copied := RunSummary{ComparisonsCount: s.ComparisonsCount}
+	if s.AnchorBlock != nil {
+		b := *s.AnchorBlock
+		copied.AnchorBlock = &b
+	}
+	if len(s.Subjects) > 0 {
+		copied.Subjects = make([]Subject, len(s.Subjects))
+		copy(copied.Subjects, s.Subjects)
+	}
+	if len(s.SourcesUsed) > 0 {
+		copied.SourcesUsed = make([]string, len(s.SourcesUsed))
+		copy(copied.SourcesUsed, s.SourcesUsed)
+	}
+	r.summary = copied
 	return nil
 }

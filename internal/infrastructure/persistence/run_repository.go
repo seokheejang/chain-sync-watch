@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -94,6 +95,24 @@ func (r *RunRepo) List(ctx context.Context, f application.RunFilter) ([]*verific
 		out = append(out, r)
 	}
 	return out, int(total), nil
+}
+
+// PruneFinishedBefore deletes terminal runs whose finished_at falls
+// strictly before the given cutoff. Discrepancies belonging to those
+// runs CASCADE per the migration 001 foreign key. Returns the number
+// of run rows removed so the retention task can surface it in logs.
+//
+// Rows with finished_at IS NULL (pending / running) are never
+// touched — retention sweeps only reclaim storage from terminal
+// history, never cancel in-flight work.
+func (r *RunRepo) PruneFinishedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	res := r.db.WithContext(ctx).Where(
+		"finished_at IS NOT NULL AND finished_at < ?", cutoff,
+	).Delete(&runModel{})
+	if res.Error != nil {
+		return 0, fmt.Errorf("run repo prune: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // Compile-time assertion that RunRepo satisfies the port.

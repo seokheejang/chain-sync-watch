@@ -52,21 +52,42 @@ func toRunModel(r *verification.Run) (runModel, error) {
 		keys = append(keys, m.Key)
 	}
 
+	summary := r.Summary()
+	subjectsData, err := marshalSubjects(summary.Subjects)
+	if err != nil {
+		return runModel{}, err
+	}
+	var anchorPtr *int64
+	if summary.AnchorBlock != nil {
+		//nolint:gosec // G115: block heights stay within int64.
+		a := int64(summary.AnchorBlock.Uint64())
+		anchorPtr = &a
+	}
+
+	// NOT NULL + no gorm default — allocate an empty slice rather
+	// than a nil slice so pq.StringArray writes `{}` instead of
+	// failing the INSERT with a constraint violation.
+	sourcesUsed := make([]string, len(summary.SourcesUsed))
+	copy(sourcesUsed, summary.SourcesUsed)
 	return runModel{
-		ID:           string(r.ID()),
-		ChainID:      r.ChainID().Uint64(),
-		Status:       string(r.Status()),
-		TriggerType:  r.Trigger().Kind(),
-		TriggerData:  trigData,
-		StrategyKind: r.Strategy().Kind(),
-		StrategyData: stratData,
-		AddressPlans: addressPlanData,
-		TokenPlans:   tokenPlanData,
-		Metrics:      keys,
-		ErrorMsg:     r.ErrorMessage(),
-		CreatedAt:    r.CreatedAt(),
-		StartedAt:    r.StartedAt(),
-		FinishedAt:   r.FinishedAt(),
+		ID:               string(r.ID()),
+		ChainID:          r.ChainID().Uint64(),
+		Status:           string(r.Status()),
+		TriggerType:      r.Trigger().Kind(),
+		TriggerData:      trigData,
+		StrategyKind:     r.Strategy().Kind(),
+		StrategyData:     stratData,
+		AddressPlans:     addressPlanData,
+		TokenPlans:       tokenPlanData,
+		Metrics:          keys,
+		ErrorMsg:         r.ErrorMessage(),
+		CreatedAt:        r.CreatedAt(),
+		StartedAt:        r.StartedAt(),
+		FinishedAt:       r.FinishedAt(),
+		AnchorBlock:      anchorPtr,
+		Subjects:         subjectsData,
+		SourcesUsed:      sourcesUsed,
+		ComparisonsCount: summary.ComparisonsCount,
 	}, nil
 }
 
@@ -96,6 +117,22 @@ func toRun(m runModel) (*verification.Run, error) {
 		metrics = append(metrics, met)
 	}
 
+	subjects, err := unmarshalSubjects(m.Subjects)
+	if err != nil {
+		return nil, err
+	}
+	var anchorPtr *chain.BlockNumber
+	if m.AnchorBlock != nil {
+		b := chain.BlockNumber(*m.AnchorBlock) //nolint:gosec // G115: DB invariant keeps non-negative.
+		anchorPtr = &b
+	}
+	summary := verification.RunSummary{
+		AnchorBlock:      anchorPtr,
+		Subjects:         subjects,
+		SourcesUsed:      append([]string(nil), m.SourcesUsed...),
+		ComparisonsCount: m.ComparisonsCount,
+	}
+
 	return verification.Rehydrate(
 		verification.RunID(m.ID),
 		chain.ChainID(m.ChainID),
@@ -109,6 +146,7 @@ func toRun(m runModel) (*verification.Run, error) {
 		m.ErrorMsg,
 		addressPlans,
 		tokenPlans,
+		summary,
 	)
 }
 

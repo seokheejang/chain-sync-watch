@@ -50,6 +50,15 @@ type Dispatcher struct {
 	schedules application.ScheduleRepository
 	opts      EnqueueOptions
 	clock     func() time.Time
+	retention *RetentionSchedule
+}
+
+// RetentionSchedule is the hard-coded housekeeping task the worker
+// fires alongside user-created schedules. Zero Days disables the
+// sweep entirely; empty CronExpr defaults to daily 03:00 UTC.
+type RetentionSchedule struct {
+	CronExpr string
+	Days     int
 }
 
 // NewDispatcher builds a Dispatcher around the given Redis
@@ -92,6 +101,21 @@ func (d *Dispatcher) WithClock(now func() time.Time) *Dispatcher {
 	return d
 }
 
+// WithRetention registers the housekeeping sweep in the
+// ConfigProvider. Zero Days is a no-op (caller disabled retention).
+// Chainable; call before ConfigProvider.
+func (d *Dispatcher) WithRetention(rs RetentionSchedule) *Dispatcher {
+	if rs.Days <= 0 {
+		return d
+	}
+	if rs.CronExpr == "" {
+		rs.CronExpr = "0 3 * * *"
+	}
+	copy := rs
+	d.retention = &copy
+	return d
+}
+
 // Close releases the underlying asynq client.
 func (d *Dispatcher) Close() error { return d.client.Close() }
 
@@ -103,6 +127,7 @@ func (d *Dispatcher) ConfigProvider() asynq.PeriodicTaskConfigProvider {
 	return &dbConfigProvider{
 		schedules: d.schedules,
 		opts:      d.opts,
+		retention: d.retention,
 	}
 }
 
@@ -193,6 +218,11 @@ func (d *Dispatcher) taskOptions() []asynq.Option {
 type dbConfigProvider struct {
 	schedules application.ScheduleRepository
 	opts      EnqueueOptions
+	// retention is optional. When non-nil, every GetConfigs() poll
+	// appends a TaskTypePruneOldRuns entry so the housekeeping sweep
+	// runs on the same manager as user schedules — no second
+	// provider, no separate start/stop.
+	retention *RetentionSchedule
 }
 
 // GetConfigs queries ListActive and renders the result as asynq
@@ -212,7 +242,7 @@ func (p *dbConfigProvider) GetConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("queue: provider list_active: %w", err)
 	}
-	out := make([]*asynq.PeriodicTaskConfig, 0, len(records))
+	out := make([]*asynq.PeriodicTaskConfig, 0, len(records)+1)
 	for _, r := range records {
 		task, err := buildScheduledRunTask(r, p.opts)
 		if err != nil {
@@ -223,7 +253,26 @@ func (p *dbConfigProvider) GetConfigs() ([]*asynq.PeriodicTaskConfig, error) {
 			Task:     task,
 		})
 	}
+	if p.retention != nil {
+		if task, err := buildPruneOldRunsTask(p.retention.Days, p.opts); err == nil {
+			out = append(out, &asynq.PeriodicTaskConfig{
+				Cronspec: p.retention.CronExpr,
+				Task:     task,
+			})
+		}
+	}
 	return out, nil
+}
+
+// buildPruneOldRunsTask renders a PruneOldRunsPayload into an asynq
+// Task. MaxRetry/Timeout follow the shared EnqueueOptions; a failed
+// sweep retries like any other task.
+func buildPruneOldRunsTask(days int, opts EnqueueOptions) (*asynq.Task, error) {
+	body, err := PruneOldRunsPayload{Days: days}.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TaskTypePruneOldRuns, body, taskOptionsFrom(opts)...), nil
 }
 
 // buildScheduledRunTask renders a ScheduleRecord into the asynq

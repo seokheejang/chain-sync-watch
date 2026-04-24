@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/chains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List supported chain catalog entries */
+        get: operations["list-chains"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/diffs": {
         parameters: {
             query?: never;
@@ -287,6 +304,17 @@ export interface components {
             /** @enum {string} */
             tier: "A" | "B" | "C" | "unknown";
         };
+        ChainView: {
+            /** @example Optimism */
+            display_name: string;
+            /**
+             * Format: int64
+             * @example 10
+             */
+            id: number;
+            /** @example optimism */
+            slug: string;
+        };
         CreateRunRequest: {
             /**
              * Format: uri
@@ -488,6 +516,17 @@ export interface components {
              */
             n: number;
         };
+        ListChainsResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListChainsResponse.json
+             */
+            readonly $schema?: string;
+            items: components["schemas"]["ChainView"][] | null;
+            /** Format: int64 */
+            total: number;
+        };
         ListDiffsResponse: {
             /**
              * Format: uri
@@ -585,6 +624,20 @@ export interface components {
             original_diff_id: string;
             resolved: boolean;
         };
+        RunSummaryIn: {
+            /**
+             * Format: int64
+             * @description Tip resolved at run start; nil for Snapshot-only runs
+             */
+            anchor_block?: number;
+            /**
+             * Format: int64
+             * @description Total (subject × metric) comparisons attempted
+             */
+            comparisons_count: number;
+            sources_used: string[] | null;
+            subjects: components["schemas"]["SubjectOut"][] | null;
+        };
         RunView: {
             /**
              * Format: uri
@@ -606,6 +659,8 @@ export interface components {
             started_at?: string;
             status: string;
             strategy_kind: string;
+            /** @description What the run actually compared; absent for runs that never executed */
+            summary?: components["schemas"]["RunSummaryIn"];
             token_plan_kinds?: string[] | null;
             trigger_kind: string;
         };
@@ -705,6 +760,16 @@ export interface components {
             /** Format: int64 */
             step: number;
         };
+        SubjectOut: {
+            a?: string;
+            /** Format: int64 */
+            b?: number;
+            /** @enum {string} */
+            k: "block" | "address_latest" | "address_at_block" | "erc20_balance" | "erc20_holdings" | "snapshot";
+            /** @description Snapshot metric key (snapshot kind only) */
+            n?: string;
+            t?: string;
+        };
         SubjectView: {
             /** @description EIP-55 address when type is address/contract */
             address?: string;
@@ -769,6 +834,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "list-chains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListChainsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     "list-diffs": {
         parameters: {
             query?: {

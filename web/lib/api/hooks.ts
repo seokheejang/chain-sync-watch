@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Schemas } from "@/lib/api/client";
 
@@ -158,6 +158,68 @@ export function useSchedules() {
   });
 }
 
+export function useCreateSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: Schemas["CreateScheduleRequest"]) => {
+      const { data, error } = await api.POST("/schedules", { body });
+      if (error) throw new Error("create schedule failed");
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["schedules"] });
+    },
+  });
+}
+
+// useCancelSchedule deactivates a recurring job. DELETE returns 204,
+// so the mutation resolves with void; callers invalidate the list
+// cache via onSuccess to flip the "active" column without a refetch
+// round-trip.
+export function useCancelSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await api.DELETE("/schedules/{id}", {
+        params: { path: { id } },
+      });
+      if (error) throw new Error("cancel schedule failed");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["schedules"] });
+    },
+  });
+}
+
+// useChainSourceCounts fans /sources?chain_id=X out across every
+// chain id passed in. The queryKey matches useSources so the two
+// hooks share the TanStack cache — the sidebar summary and the
+// detail table never double-fetch the same page. Callers get a
+// plain {chainId: count} map so the UI layer doesn't have to know
+// the query shape.
+export function useChainSourceCounts(chainIds: number[]) {
+  const results = useQueries({
+    queries: chainIds.map((id) => ({
+      queryKey: ["sources", id],
+      queryFn: async ({ signal }: { signal: AbortSignal }) => {
+        const { data, error } = await api.GET("/sources", {
+          params: { query: { chain_id: id } },
+          signal,
+        });
+        if (error) throw new Error("list sources failed");
+        return data;
+      },
+      enabled: id > 0,
+    })),
+  });
+  const counts: Record<number, number> = {};
+  chainIds.forEach((id, idx) => {
+    counts[id] = results[idx].data?.items?.length ?? 0;
+  });
+  const isLoading = results.some((r) => r.isLoading);
+  return { counts, isLoading };
+}
+
 export function useSources(chainId: number) {
   return useQuery({
     queryKey: ["sources", chainId],
@@ -267,6 +329,22 @@ export function useDeleteSource() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["sources"] });
     },
+  });
+}
+
+// useChains returns the chain catalog the backend advertises. Served
+// from embedded defaults.yaml through /chains so the frontend's
+// dropdowns and the sources sidebar stay in sync with the binary's
+// known chain list without a duplicated hardcoded map.
+export function useChains() {
+  return useQuery({
+    queryKey: ["chains"],
+    queryFn: async ({ signal }) => {
+      const { data, error } = await api.GET("/chains", { signal });
+      if (error) throw new Error("list chains failed");
+      return data;
+    },
+    staleTime: 5 * 60_000,
   });
 }
 

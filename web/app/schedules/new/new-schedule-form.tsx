@@ -19,11 +19,8 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { useChainSourceCounts, useChains, useCreateRun } from "@/lib/api/hooks";
+import { useChainSourceCounts, useChains, useCreateSchedule } from "@/lib/api/hooks";
 
-// Metric catalog — mirrors internal/verification/metric.go. When the
-// backend exposes a /metrics endpoint we switch this to a fetched
-// list; hard-coding for now keeps the MVP form self-contained.
 const METRICS = [
   { key: "block.hash", category: "BlockImmutable" },
   { key: "block.parent_hash", category: "BlockImmutable" },
@@ -43,27 +40,33 @@ const METRICS = [
   { key: "address.erc20_holdings_latest", category: "AddressLatest" },
 ] as const;
 
-// MVP schema — latest_n sampling + manual trigger only. The fuller
-// discriminated unions (fixed_list / random / sparse_steps, scheduled
-// / realtime triggers, address_plans, token_plans) land in follow-ups.
+// MVP schema mirrors /runs/new: latest_n sampling + manual-style
+// metric picker, plus the cron expression this page adds on top. The
+// fuller union-typed sampling, address plans, and token plans remain
+// follow-ups in both forms.
 const formSchema = z.object({
   chain_id: z.coerce.number().int().min(1, "Chain id is required"),
   metrics: z.array(z.string()).min(1, "Pick at least one metric"),
   latest_n: z.coerce.number().int().min(1).max(1000),
-  user: z.string().min(1, "Who is running this?"),
+  // asynq's scheduler (robfig/cron v3) expects a 5-field spec:
+  // minute hour day-of-month month day-of-week. Six-field forms
+  // that include a leading seconds column are rejected at
+  // registration time and the schedule silently never fires.
+  cron_expr: z
+    .string()
+    .trim()
+    .min(1, "Cron expression is required")
+    .refine((v) => v.split(/\s+/).length === 5, "Must be 5 fields: minute hour dom month dow"),
+  timezone: z.string().trim().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
-export function NewRunForm() {
+export function NewScheduleForm() {
   const router = useRouter();
-  const create = useCreateRun();
+  const create = useCreateSchedule();
   const { data: chainsData } = useChains();
   const chains = chainsData?.items ?? [];
-  // Filter the dropdown to chains with at least one source row — an
-  // unconfigured chain would produce empty runs (no sources for
-  // ExecuteRun to fan out to), so we hide it entirely instead of
-  // letting operators submit a no-op request.
   const { counts: chainSourceCounts } = useChainSourceCounts(chains.map((c) => c.id));
   const configuredChains = chains.filter((c) => (chainSourceCounts[c.id] ?? 0) > 0);
 
@@ -73,7 +76,8 @@ export function NewRunForm() {
       chain_id: 10,
       metrics: ["block.hash"],
       latest_n: 3,
-      user: "web-ui",
+      cron_expr: "*/5 * * * *",
+      timezone: "UTC",
     },
   });
 
@@ -86,17 +90,18 @@ export function NewRunForm() {
           kind: "latest_n",
           latest_n: { n: values.latest_n },
         },
-        trigger: {
-          kind: "manual",
-          user: values.user,
+        schedule: {
+          cron_expr: values.cron_expr,
+          timezone: values.timezone || undefined,
         },
       },
       {
         onSuccess: (data) => {
-          toast.success(`Run created — ${data?.run_id}`);
-          if (data?.run_id) router.push(`/runs/${data.run_id}`);
+          toast.success(`Schedule created — ${data?.job_id}`);
+          router.push("/schedules");
         },
-        onError: (err) => toast.error(err instanceof Error ? err.message : "Create run failed"),
+        onError: (err) =>
+          toast.error(err instanceof Error ? err.message : "Create schedule failed"),
       },
     );
   };
@@ -110,12 +115,16 @@ export function NewRunForm() {
   return (
     <div className="max-w-3xl space-y-4">
       <div>
-        <Link href="/runs" className={buttonVariants({ variant: "ghost", size: "sm" }) + " mb-2"}>
-          <ArrowLeft className="mr-2 h-4 w-4" /> Runs
+        <Link
+          href="/schedules"
+          className={buttonVariants({ variant: "ghost", size: "sm" }) + " mb-2"}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" /> Schedules
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">New schedule</h1>
         <p className="text-sm text-muted-foreground">
-          Dispatches a manual verification run. Scheduled and realtime triggers land in a follow-up.
+          Registers a recurring verification job. Each tick materialises a Run with the cron
+          expression as its trigger.
         </p>
       </div>
 
@@ -163,21 +172,42 @@ export function NewRunForm() {
                   <FormItem>
                     <FormLabel>Latest N blocks</FormLabel>
                     <Input type="number" min={1} max={1000} {...field} />
-                    <FormDescription>How many trailing blocks from tip to verify.</FormDescription>
+                    <FormDescription>How many trailing blocks from tip per tick.</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Cadence</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="cron_expr"
+                render={({ field }) => (
+                  <FormItem className="sm:col-span-2">
+                    <FormLabel>Cron expression</FormLabel>
+                    <Input placeholder="*/5 * * * *" {...field} />
+                    <FormDescription>
+                      5-field cron (minute, hour, dom, month, dow). Example {' "*/5 * * * *" '}
+                      fires every 5 minutes. Seconds are not supported.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
               <FormField
                 control={form.control}
-                name="user"
+                name="timezone"
                 render={({ field }) => (
-                  <FormItem className="sm:col-span-2">
-                    <FormLabel>Triggered by</FormLabel>
-                    <Input {...field} />
-                    <FormDescription>
-                      Operator identifier persisted with the run's manual trigger.
-                    </FormDescription>
+                  <FormItem>
+                    <FormLabel>Timezone (optional)</FormLabel>
+                    <Input placeholder="UTC" {...field} />
+                    <FormDescription>IANA name; empty = UTC.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -228,18 +258,18 @@ export function NewRunForm() {
                 )}
               />
               <p className="text-xs text-muted-foreground">
-                AddressLatest / AddressAtBlock / ERC-20 metrics need an address plan (or token
-                plan), which the MVP form doesn't capture yet. Selecting them will run but yield no
-                diffs until address/token plans are wired.
+                AddressLatest / AddressAtBlock / ERC-20 metrics require address or token plans. The
+                MVP form doesn't capture those yet — ticks will run but yield no diffs for those
+                categories until the plan editors ship.
               </p>
             </CardContent>
           </Card>
 
           <div className="flex items-center gap-2">
             <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? "Creating…" : "Create run"}
+              {create.isPending ? "Creating…" : "Create schedule"}
             </Button>
-            <Link href="/runs" className={buttonVariants({ variant: "outline" })}>
+            <Link href="/schedules" className={buttonVariants({ variant: "outline" })}>
               Cancel
             </Link>
           </div>
