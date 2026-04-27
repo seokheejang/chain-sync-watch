@@ -1,0 +1,300 @@
+# Default values for chain-sync-watch.
+# Three app Deployments (server / worker / web) + one pre-install/upgrade
+# Job (migrate). Postgres / Redis ship as optional Bitnami subcharts so
+# `helm install` is one command; flip `.enabled` off and point at an
+# external managed service for production.
+
+# -- Container images. The backend image packs csw-server / csw-worker /
+# csw CLI in one tag; `command:` selects the entrypoint per Deployment.
+image:
+  registry: ghcr.io
+  repository: seokheejang/chain-sync-watch
+  # Defaults to Chart.appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Next.js frontend image.
+imageWeb:
+  registry: ghcr.io
+  repository: seokheejang/chain-sync-watch-web
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Pull secrets apply to all three Deployments + migrate Job.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# -- Non-secret env injected into all three Deployments via
+# `envFrom: configMapRef`. Keys use the CSW_*__* convention (see
+# internal/config). Put DB/Redis URLs and API keys under .secrets
+# instead so they land in a Secret.
+config:
+  CSW_SERVER_ADDR: ":8080"
+  CSW_SERVER_CORS_ORIGINS: ""
+  CSW_WORKER_HEALTH_ADDR: ":8082"
+  CSW_WORKER_CONCURRENCY: "10"
+  CSW_ADAPTERS__RPC__ARCHIVE: "false"
+
+# -- Secrets rendered into a k8s Secret (envFrom: secretRef). Leave
+# empty in committed values.yaml; supply via -f values.secret.yaml
+# (gitignored) or CI `--set` injection. When postgresql/redis subcharts
+# are enabled and DATABASE_URL / REDIS_URL are empty, the chart derives
+# them from the subchart services automatically.
+secrets:
+  DATABASE_URL: ""
+  REDIS_URL: ""
+  # AES-GCM key for the encrypted secret store (internal/infrastructure/secrets).
+  # Generate with: openssl rand -base64 32
+  CSW_SECRET_KEY: ""
+  # Private RPC override for chainid=10 (Optimism).
+  CSW_ADAPTERS__RPC__ENDPOINTS__10: ""
+  # Etherscan / Blockscout API keys if you need higher rate limits.
+  CSW_ADAPTERS__ETHERSCAN__API_KEY: ""
+
+# -- csw-server (HTTP API) Deployment.
+server:
+  enabled: true
+  replicaCount: 2
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 8080
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  # SIGTERM → graceful shutdown. preStop sleep lets LB drain before the
+  # server stops accepting new connections.
+  terminationGracePeriodSeconds: 30
+  preStopSleepSeconds: 5
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    # Set to a non-empty integer to add a memory metric. Leave empty for CPU only.
+    targetMemoryUtilizationPercentage: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+    # Either minAvailable OR maxUnavailable — set the other to "" to omit.
+    maxUnavailable: ""
+
+# -- csw-worker (asynq) Deployment. Health probe hits :8082 (the port
+# that CSW_WORKER_HEALTH_ADDR binds). Resource limits are looser because
+# the worker runs I/O-heavy verification passes.
+worker:
+  enabled: true
+  replicaCount: 1
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  healthPort: 8082
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: health
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  terminationGracePeriodSeconds: 60
+  preStopSleepSeconds: 5
+  # CPU-based autoscaling. Queue-depth scaling needs a custom-metrics
+  # adapter (KEDA / asynq exporter) — out of scope here.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: ""
+
+# -- Next.js web UI. NEXT_PUBLIC_API_BASE_URL is baked into the bundle
+# at build time, so runtime toggles are limited: the prebuilt image
+# defaults to http://localhost:8080 (compose parity). In-cluster you
+# typically front csw-server with the same Ingress as web and rewrite
+# /api → csw-server — in that case build a custom image with
+# NEXT_PUBLIC_API_BASE_URL="" and the bundle uses relative URLs.
+web:
+  enabled: true
+  replicaCount: 2
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 3000
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: ""
+
+# -- One-shot migration Job. Runs `csw migrate up` as a
+# helm.sh/hook: pre-install,pre-upgrade so the app pods never see an
+# unmigrated schema. Delete-policy clears prior Job objects between
+# releases.
+migrate:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# -- Pod-level security. Distroless-style nonroot defaults. Override
+# fsGroup if you add volumes that need group-writable access.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Bitnami Postgres subchart. Ships with the chart for one-shot
+# `helm install`. Disable in prod and set .secrets.DATABASE_URL to your
+# managed instance (RDS, Cloud SQL, Crunchy, etc.).
+postgresql:
+  enabled: true
+  auth:
+    username: csw
+    password: csw
+    database: csw
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+
+# -- Bitnami Redis subchart. Standalone only (no replicas) — asynq
+# doesn't need HA here and the op footprint is smaller.
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 2Gi
+
+# -- Single Ingress fronting both the web UI and the API server. The
+# default routes "/" → web Service and "/api" → server Service so a
+# rewrite-rule on the controller can strip the prefix. Disable and run
+# your own Ingress / Gateway resource if this layout doesn't fit.
+ingress:
+  enabled: false
+  className: ""
+  # Hostname for both web + API. Leave empty for a host-less rule.
+  host: ""
+  annotations: {}
+  # Web UI mount path. Most controllers treat "/" as the catch-all.
+  webPath: /
+  webPathType: Prefix
+  # API mount path. Server expects to be reached at the root, so most
+  # controllers need a rewrite annotation (e.g. for ingress-nginx:
+  # `nginx.ingress.kubernetes.io/rewrite-target: /$2` plus `/api(/|$)(.*)`).
+  apiEnabled: true
+  apiPath: /api
+  apiPathType: Prefix
+  tls: []
+    # - secretName: csw-tls
+    #   hosts:
+    #     - csw.example.com
+
+# -- Prometheus Operator integration. Requires the `monitoring.coreos.com`
+# CRDs (Prometheus Operator). Server `/metrics` endpoint is not yet
+# implemented in csw-server — when it lands, this scaffolding works
+# without further changes.
+metrics:
+  serviceMonitor:
+    enabled: false
+    # Namespace of the Prometheus Operator. Leave empty to render in the
+    # release namespace.
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    additionalLabels: {}
+
+# -- ExternalSecrets Operator (external-secrets.io) support. When
+# enabled, the chart renders an `ExternalSecret` that materialises into
+# the same k8s Secret name the Deployments mount via envFrom. The
+# inline `.secrets` map is ignored in this mode — values come from the
+# remote store. Required CRD: `external-secrets.io/v1`.
+externalSecrets:
+  enabled: false
+  # Refresh interval — see external-secrets docs for syntax.
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: ""
+  # Map env-var name (key in the rendered Secret) → remote ref. At
+  # minimum DATABASE_URL, REDIS_URL, CSW_SECRET_KEY must be supplied.
+  data: {}
+    # DATABASE_URL:
+    #   key: csw/database-url
+    # REDIS_URL:
+    #   key: csw/redis-url
+    # CSW_SECRET_KEY:
+    #   key: csw/secret-key
+
+# -- Scheduling knobs applied to server + worker + web.
+nodeSelector: {}
+tolerations: []
+affinity: {}

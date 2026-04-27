@@ -1,0 +1,27 @@
+apiVersion: v2
+name: chain-sync-watch
+description: Helm chart for chain-sync-watch — chain indexer verification tool (server + worker + web + migration job).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/seokheejang/chain-sync-watch
+sources:
+  - https://github.com/seokheejang/chain-sync-watch
+maintainers:
+  - name: seokheejang
+    url: https://github.com/seokheejang
+keywords:
+  - blockchain
+  - indexer
+  - verification
+  - optimism
+kubeVersion: ">=1.28.0-0"
+dependencies:
+  - name: postgresql
+    version: "^16.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "^20.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

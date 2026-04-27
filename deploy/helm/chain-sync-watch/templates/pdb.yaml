@@ -1,0 +1,27 @@
+{{/*
+PodDisruptionBudget — one per pdb-enabled component. Set exactly one
+of minAvailable / maxUnavailable; the empty-string sentinel skips that
+field. With replicaCount=2 and minAvailable=1 the cluster respects
+voluntary disruptions (drain, upgrade) without a full outage.
+*/}}
+{{- range $name, $cfg := dict "server" .Values.server "worker" .Values.worker "web" .Values.web }}
+{{- if and $cfg.enabled $cfg.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "chain-sync-watch.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "chain-sync-watch.componentLabels" (merge (dict "component" $name) $) | nindent 4 }}
+spec:
+  {{- with $cfg.pdb.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with $cfg.pdb.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "chain-sync-watch.componentSelectorLabels" (merge (dict "component" $name) $) | nindent 6 }}
+{{- end }}
+{{- end }}

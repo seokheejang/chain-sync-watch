@@ -1,0 +1,23 @@
+# Patterns to ignore when building packages.
+.DS_Store
+.git/
+.gitignore
+.bzr/
+.hg/
+.hgignore
+.svn/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Misc
+.project
+.tool-versions
+# Chart artifacts
+OWNERS
+values.secret*.yaml
+values.local*.yaml

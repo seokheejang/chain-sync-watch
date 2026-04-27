@@ -1,0 +1,70 @@
+chain-sync-watch {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+{{- if .Values.server.enabled }}
+  ✓ server  — Deployment {{ include "chain-sync-watch.fullname" . }}-server  (replicas={{ .Values.server.replicaCount }})
+{{- end }}
+{{- if .Values.worker.enabled }}
+  ✓ worker  — Deployment {{ include "chain-sync-watch.fullname" . }}-worker  (replicas={{ .Values.worker.replicaCount }})
+{{- end }}
+{{- if .Values.web.enabled }}
+  ✓ web     — Deployment {{ include "chain-sync-watch.fullname" . }}-web     (replicas={{ .Values.web.replicaCount }})
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+  ✓ postgres — {{ .Release.Name }}-postgresql (Bitnami subchart)
+{{- end }}
+{{- if .Values.redis.enabled }}
+  ✓ redis    — {{ .Release.Name }}-redis-master (Bitnami subchart)
+{{- end }}
+
+Check pod status:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Port-forward the web UI:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chain-sync-watch.fullname" . }}-web {{ .Values.web.service.port }}:{{ .Values.web.service.port }}
+  open http://localhost:{{ .Values.web.service.port }}
+
+Port-forward the API:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chain-sync-watch.fullname" . }}-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }}
+  curl http://localhost:{{ .Values.server.service.port }}/healthz
+
+Tail logs:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=server -f
+
+Migration Job (runs on every install/upgrade as a pre-hook):
+  kubectl -n {{ .Release.Namespace }} get jobs -l app.kubernetes.io/component=migrate
+{{- if .Values.ingress.enabled }}
+
+Ingress: {{ if .Values.ingress.host }}{{ .Values.ingress.host }}{{ else }}<no host — using default backend>{{ end }} (className={{ default "<default>" .Values.ingress.className }})
+  curl http{{ if .Values.ingress.tls }}s{{ end }}://{{ default "localhost" .Values.ingress.host }}{{ .Values.ingress.webPath }}
+{{- end }}
+{{- if or .Values.server.autoscaling.enabled .Values.worker.autoscaling.enabled .Values.web.autoscaling.enabled }}
+
+HPA active:
+{{- if .Values.server.autoscaling.enabled }}
+  • server  ({{ .Values.server.autoscaling.minReplicas }}–{{ .Values.server.autoscaling.maxReplicas }} replicas, target CPU {{ .Values.server.autoscaling.targetCPUUtilizationPercentage }}%)
+{{- end }}
+{{- if .Values.worker.autoscaling.enabled }}
+  • worker  ({{ .Values.worker.autoscaling.minReplicas }}–{{ .Values.worker.autoscaling.maxReplicas }} replicas, target CPU {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}%)
+{{- end }}
+{{- if .Values.web.autoscaling.enabled }}
+  • web     ({{ .Values.web.autoscaling.minReplicas }}–{{ .Values.web.autoscaling.maxReplicas }} replicas, target CPU {{ .Values.web.autoscaling.targetCPUUtilizationPercentage }}%)
+{{- end }}
+{{- end }}
+{{- if .Values.externalSecrets.enabled }}
+
+ExternalSecrets in use — values come from {{ .Values.externalSecrets.secretStoreRef.kind }}/{{ .Values.externalSecrets.secretStoreRef.name }}.
+The inline `.secrets` map is ignored. Confirm the ExternalSecret is synced:
+  kubectl -n {{ .Release.Namespace }} get externalsecret {{ include "chain-sync-watch.secretName" . }}
+{{- end }}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+
+ServiceMonitor enabled — scrapes {{ .Values.metrics.serviceMonitor.path }} on csw-server every {{ .Values.metrics.serviceMonitor.interval }}.
+The /metrics endpoint isn't wired into csw-server yet; this scaffolding activates as soon as it lands.
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+
+⚠  Postgres subchart is enabled ({{ .Values.postgresql.enabled }}). Default credentials are committed defaults (csw/csw) and the PVC
+    survives `helm uninstall` — for anything beyond local / CI use, disable the subchart and point at a managed Postgres via
+    .Values.secrets.DATABASE_URL.
+{{- end }}

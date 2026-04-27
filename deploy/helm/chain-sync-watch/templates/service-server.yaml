@@ -1,0 +1,17 @@
+{{- if .Values.server.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chain-sync-watch.fullname" . }}-server
+  labels:
+    {{- include "chain-sync-watch.componentLabels" (merge (dict "component" "server") .) | nindent 4 }}
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - port: {{ .Values.server.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "chain-sync-watch.componentSelectorLabels" (merge (dict "component" "server") .) | nindent 4 }}
+{{- end }}

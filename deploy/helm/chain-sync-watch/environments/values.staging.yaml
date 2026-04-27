@@ -1,0 +1,71 @@
+# staging — production-shaped, but uses bundled subcharts so you can
+# stand up a full clone without provisioning managed services. Real
+# secrets come from ExternalSecrets pointing at the staging vault.
+#
+#   helm install csw deploy/helm/chain-sync-watch \
+#     -f deploy/helm/chain-sync-watch/environments/values.staging.yaml \
+#     -n csw-staging --create-namespace
+
+server:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+worker:
+  replicaCount: 1
+  pdb:
+    enabled: true
+    minAvailable: 1
+web:
+  replicaCount: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 20Gi
+redis:
+  enabled: true
+  master:
+    persistence:
+      size: 4Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: csw.staging.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+  apiPath: /api(/|$)(.*)
+  apiPathType: ImplementationSpecific
+  tls:
+    - secretName: csw-staging-tls
+      hosts:
+        - csw.staging.example.com
+
+# Wire secrets through ExternalSecrets in staging — copy the data block
+# below into a secret-overlay file once your SecretStore is provisioned.
+externalSecrets:
+  enabled: false
+  # secretStoreRef:
+  #   kind: ClusterSecretStore
+  #   name: aws-secretsmanager-staging
+  # data:
+  #   CSW_SECRET_KEY:
+  #     key: csw/staging/secret-key
+  #   CSW_ADAPTERS__ETHERSCAN__API_KEY:
+  #     key: csw/staging/etherscan-api-key
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s

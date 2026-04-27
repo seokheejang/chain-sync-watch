@@ -1,0 +1,32 @@
+{{- if .Values.metrics.serviceMonitor.enabled -}}
+{{/*
+Prometheus Operator ServiceMonitor for csw-server. The /metrics
+handler isn't wired into csw-server yet (tracked separately) — this
+template ships ahead of time so cluster operators can enable scraping
+the moment the endpoint lands without touching the chart.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "chain-sync-watch.fullname" . }}-server
+  {{- with .Values.metrics.serviceMonitor.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "chain-sync-watch.componentLabels" (merge (dict "component" "server") .) | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "chain-sync-watch.componentSelectorLabels" (merge (dict "component" "server") .) | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.metrics.serviceMonitor.path }}
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+{{- end }}

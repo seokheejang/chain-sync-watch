@@ -1,0 +1,47 @@
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "chain-sync-watch.fullname" . -}}
+{{- $webSvc := printf "%s-web" $fullName -}}
+{{- $serverSvc := printf "%s-server" $fullName -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "chain-sync-watch.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          {{- if and .Values.ingress.apiEnabled .Values.server.enabled }}
+          - path: {{ .Values.ingress.apiPath }}
+            pathType: {{ .Values.ingress.apiPathType }}
+            backend:
+              service:
+                name: {{ $serverSvc }}
+                port:
+                  number: {{ .Values.server.service.port }}
+          {{- end }}
+          {{- if .Values.web.enabled }}
+          - path: {{ .Values.ingress.webPath }}
+            pathType: {{ .Values.ingress.webPathType }}
+            backend:
+              service:
+                name: {{ $webSvc }}
+                port:
+                  number: {{ .Values.web.service.port }}
+          {{- end }}
+{{- end }}

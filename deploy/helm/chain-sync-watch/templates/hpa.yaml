@@ -1,0 +1,41 @@
+{{/*
+HorizontalPodAutoscaler v2 — one per autoscaling-enabled component.
+When .autoscaling.enabled=true, the matching Deployment template
+omits `spec.replicas` so the HPA owns the field (Helm best practice
+for autoscaled workloads).
+*/}}
+{{- range $name, $cfg := dict "server" .Values.server "worker" .Values.worker "web" .Values.web }}
+{{- if and $cfg.enabled $cfg.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "chain-sync-watch.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "chain-sync-watch.componentLabels" (merge (dict "component" $name) $) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "chain-sync-watch.fullname" $ }}-{{ $name }}
+  minReplicas: {{ $cfg.autoscaling.minReplicas }}
+  maxReplicas: {{ $cfg.autoscaling.maxReplicas }}
+  metrics:
+    {{- with $cfg.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $cfg.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}
+{{- end }}

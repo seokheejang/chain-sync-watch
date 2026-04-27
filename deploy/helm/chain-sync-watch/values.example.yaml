@@ -1,0 +1,38 @@
+# Example override values. Copy this file to `values.secret.yaml` (or
+# any name matching `values.secret*.yaml` / `values.local*.yaml`, which
+# are gitignored) and pass it with:
+#
+#   helm install csw ./deploy/helm/chain-sync-watch \
+#     -f ./deploy/helm/chain-sync-watch/values.secret.yaml \
+#     -n chain-sync-watch --create-namespace
+#
+# Never commit real credentials. Prefer `--set` from CI secrets or an
+# ExternalSecrets-backed flow for production (slice 2 of phase 11).
+
+secrets:
+  # Required. Generate with: openssl rand -base64 32
+  CSW_SECRET_KEY: "replace-me-with-32-bytes-base64"
+
+  # Optional — leave empty to use the bundled Postgres subchart.
+  # DATABASE_URL: "postgres://user:pass@db.internal:5432/csw?sslmode=require"
+  # REDIS_URL: "redis://cache.internal:6379/0"
+
+  # Private RPC override for Optimism (chainid 10). Remove if you want
+  # to use the public default in internal/config/defaults.yaml.
+  # CSW_ADAPTERS__RPC__ENDPOINTS__10: "https://your-private-rpc.example.com"
+
+  # Etherscan API key for higher rate limits.
+  # CSW_ADAPTERS__ETHERSCAN__API_KEY: "YOUR_ETHERSCAN_KEY"
+
+# Prod-leaning toggles — swap managed services in, drop the subcharts.
+# postgresql:
+#   enabled: false
+# redis:
+#   enabled: false
+
+# server:
+#   replicaCount: 3
+# worker:
+#   replicaCount: 2
+# web:
+#   replicaCount: 3

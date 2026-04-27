@@ -66,3 +66,6 @@ logs/
 # Kubernetes / Helm
 deploy/helm/**/charts/
 *.tgz
+# Local values files — keep real credentials out of git
+deploy/helm/**/values.secret*.yaml
+deploy/helm/**/values.local*.yaml

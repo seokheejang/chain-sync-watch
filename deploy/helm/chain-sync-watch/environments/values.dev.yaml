@@ -1,0 +1,30 @@
+# dev — single-node minikube/kind. Bundled Postgres/Redis, no Ingress,
+# minimal replicas, no PDB/HPA. Pass an inline CSW_SECRET_KEY at install.
+#
+#   helm install csw deploy/helm/chain-sync-watch \
+#     -f deploy/helm/chain-sync-watch/environments/values.dev.yaml \
+#     --set secrets.CSW_SECRET_KEY="$(openssl rand -base64 32)" \
+#     -n csw-dev --create-namespace
+
+server:
+  replicaCount: 1
+worker:
+  replicaCount: 1
+web:
+  replicaCount: 1
+
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      size: 1Gi
+redis:
+  enabled: true
+  master:
+    persistence:
+      size: 256Mi
+
+ingress:
+  enabled: false
+externalSecrets:
+  enabled: false

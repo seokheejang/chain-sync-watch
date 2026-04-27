@@ -4,18 +4,31 @@
 
 프로덕션·스테이징 환경에 K8s 배포. **Helm chart**로 패키징해 재사용·커스터마이즈 용이하게. OSS 사용자도 동일 chart로 자기 클러스터에 올릴 수 있어야 함.
 
+## 진행 현황 (2026-04-27)
+
+작업을 4개 슬라이스로 쪼개 진행. 슬라이스 1·2 완료, 3·4 는 미착수.
+
+- ✅ **슬라이스 1 — MVP chart** (2026-04-24): server / worker / web Deployment + Service, migrate Job(helm hook), ConfigMap + Secret (값 주입 → chart 가 k8s Secret 렌더), ServiceAccount, Postgres/Redis Bitnami subchart(`enabled=true` 기본, subchart off 시 외부 URL 주입), NOTES.txt, chart README, top-level `deploy/README.md`, `values.example.yaml`, gitignore 보강. `helm dependency update` + `helm lint` + `helm template` smoke OK (25 리소스, fail-fast 3종 동작 확인).
+- ✅ **슬라이스 2 — prod-ready features** (2026-04-27): `templates/ingress.yaml` (web + `/api` 라우팅, TLS), `templates/hpa.yaml` (server / worker / web range loop, autoscaling/v2, CPU + 선택 memory metric), `templates/pdb.yaml` (3 컴포넌트 range, minAvailable XOR maxUnavailable 빈문자열 sentinel), `templates/servicemonitor.yaml` (Prometheus Operator 스캐폴드 — `/metrics` 미구현 상태에서 미리 와이어업), `templates/externalsecret.yaml` + Secret 템플릿 short-circuit (externalSecrets.enabled=true 시 inline Secret 비렌더). `values.schema.json` JSON Schema (필수 키·enum 검증). `environments/values.{dev,staging,prod}.yaml` 3종 overlay (dev=single-replica + 번들 subchart, staging=HPA+PDB+Ingress+ServiceMonitor, prod=managed DB + ExternalSecrets-only). Deployment 3종 모두 `spec.replicas` 가 autoscaling.enabled 시 생략 (HPA 가 필드 owner). `helm template` 풀세트(33 리소스) + 환경별(dev=25, staging=31, prod=23) 검증 OK + ExternalSecrets fail-fast 2종 + schema enum 거부 확인.
+- ⬜ **슬라이스 3 — 릴리스 파이프라인**: `.github/workflows/release.yml` (docker buildx multi-arch → GHCR push + `helm package`), kubeconform CI job.
+- ⬜ **슬라이스 4 (선택)**: ArgoCD `Application` 템플릿 (`deploy/argocd/`), kind 로컬 스모크 설치 스크립트.
+
 ## 산출물 (DoD)
 
-- [ ] `deploy/helm/chain-sync-watch/` — Helm chart (사용자가 `helm install` 가능)
-- [ ] `deploy/helm/chain-sync-watch/values.yaml` — 기본값
-- [ ] `deploy/helm/chain-sync-watch/values.example.yaml` — 커스터마이즈 예시 (사내용, API 키·URL 실값 금지)
-- [ ] 템플릿: Deployment(server, worker), Service, Ingress, ConfigMap, Secret, Job(migrate), ServiceMonitor(선택), HPA(선택)
-- [ ] Postgres / Redis는 **외부 매니지드 서비스** 가정 (chart에 포함하지 않음, URL만 주입). 선택적으로 Bitnami subchart 도입 가능하게 values 플래그.
-- [ ] CI로 `helm lint` + `helm template` + `kubeval`/`kubeconform` 검증
-- [ ] 이미지 빌드 파이프라인: Dockerfile (멀티스테이지) + `.github/workflows/release.yml` → GHCR push
-- [ ] 배포 문서 (`deploy/README.md`) — 로컬 `helm install`부터 프로덕션 시크릿 주입까지
-- [ ] 환경별 values overlay (`values.dev.yaml`, `values.staging.yaml`, `values.prod.yaml`)
-- [ ] 선택: ArgoCD `Application` 매니페스트 템플릿 (GitOps 배포 원할 시)
+- [x] `deploy/helm/chain-sync-watch/` — Helm chart (사용자가 `helm install` 가능)  *[슬라이스 1]*
+- [x] `deploy/helm/chain-sync-watch/values.yaml` — 기본값  *[슬라이스 1]*
+- [x] `deploy/helm/chain-sync-watch/values.example.yaml` — 커스터마이즈 예시 (사내용, API 키·URL 실값 금지)  *[슬라이스 1]*
+- [x] 템플릿: Deployment(server, worker, **web**), Service, ConfigMap, Secret, Job(migrate), ServiceAccount, NOTES.txt  *[슬라이스 1]*
+- [x] 템플릿: Ingress, HPA, PDB, ServiceMonitor  *[슬라이스 2]*
+- [x] `values.schema.json` 검증  *[슬라이스 2]*
+- [x] ExternalSecrets Operator 지원 (`templates/externalsecret.yaml` + Secret 템플릿 short-circuit)  *[슬라이스 2]*
+- [x] Postgres / Redis — **Bitnami subchart 기본 enabled** (단일 `helm install` 목표). `enabled=false` 로 끄면 `.secrets.DATABASE_URL` / `.secrets.REDIS_URL` 수동 주입.  *[슬라이스 1 — 원안의 "외부 전제" 에서 변경]*
+- [ ] CI 로 `helm lint` + `helm template` + `kubeconform` 검증  *[슬라이스 3]*
+- [x] 이미지 빌드 파이프라인: Dockerfile (멀티스테이지) — 10b 에서 이미 존재  *[슬라이스 1 전제]*
+- [ ] `.github/workflows/release.yml` → GHCR push  *[슬라이스 3]*
+- [x] 배포 문서 (`deploy/README.md`) — 로컬 `helm install` 부터 시크릿 주입 패턴까지  *[슬라이스 1]*
+- [x] 환경별 values overlay (`environments/values.dev.yaml`, `values.staging.yaml`, `values.prod.yaml`)  *[슬라이스 2]*
+- [ ] 선택: ArgoCD `Application` 매니페스트 템플릿  *[슬라이스 4]*
 
 ## 설계
 
