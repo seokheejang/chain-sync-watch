@@ -9,9 +9,9 @@ import (
 // queued job, so changing them would orphan in-flight tasks on
 // running deployments. Add new constants here rather than renaming.
 const (
-	TaskTypeExecuteRun        = "verification:execute_run"
-	TaskTypeScheduledRun      = "verification:scheduled_run"
-	TaskTypePruneOldRuns      = "maintenance:prune_old_runs"
+	TaskTypeExecuteRun   = "verification:execute_run"
+	TaskTypeScheduledRun = "verification:scheduled_run"
+	TaskTypePruneOldRuns = "maintenance:prune_old_runs"
 )
 
 // Queue names. Tier-aware weights land in Phase 7D; for now every

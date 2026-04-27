@@ -1,9 +1,21 @@
-# Phase 12 — Probe Context (post-MVP, 별도 Bounded Context)
+# Phase 12 — Probe Context (별도 Bounded Context)
 
 > 이 문서는 **Phase 7 이후** 착수할 신규 bounded context의 스케치이다.
 > 구현은 Phase 8 (HTTP API) 이후 원하는 시점에 시작한다. 여기서는 설계 방향과
 > 결정사항만 기록해 Phase 8 API 설계 / Phase 9 프론트 설계가 이 영역의
 > 존재를 알고 진행하도록 한다.
+
+## 진행 현황 (2026-04-27)
+
+작업을 7개 슬라이스로 쪼개 진행. 슬라이스 1 완료, 2~7 미착수.
+
+- ✅ **슬라이스 12.1 — Domain** (2026-04-27): `internal/probe/` 순수 도메인. `Probe` 애그리게이트(ID + Target + Schedule + Thresholds + Enabled), `ProbeTarget`(http/rpc/graphql kind, URL/Method/Headers/Body), `ProbeSchedule`(cron XOR interval, ≥1s), `Threshold`(latency_p95_ms / latency_p99_ms / error_rate_pct / consecutive_failures + WindowSec + Label), `Observation`(immutable, 6-class `ErrorClass` enum: none/network/timeout/http_4xx/http_5xx/protocol, status/class consistency check, ErrMsgMaxLen=512 truncation), `Incident`(open/close 라이프사이클 + Breach + Evidence). 모든 애그리게이트 defensive copy + Rehydrate (validation skip) + black-box `_test` 패키지. depguard 룰 (`domain-purity` + `application-boundary`)에 `internal/probe` 추가. 테스트 커버리지 95.7%, race+vet+lint 통과.
+- ⬜ **슬라이스 12.2 — Application**: `internal/application/probe/` — `RunProbe` / `EvaluateWindow` / `QueryProbes` / `QueryIncidents` use case + ports (ProbeRepo, ObservationRepo, IncidentRepo, HTTPProber).
+- ⬜ **슬라이스 12.3 — Adapter**: `adapters/httpprobe/` — RTT 측정 + 에러 분류, `adapters/internal/httpx/` 재사용.
+- ⬜ **슬라이스 12.4 — Persistence**: migration + gorm models + 3 repository (probes/observations/incidents).
+- ⬜ **슬라이스 12.5 — Queue**: asynq `probe:run` task + handler + scheduler config provider 통합.
+- ⬜ **슬라이스 12.6 — HTTP API**: `/probes` / `/observations` / `/incidents` (read-first).
+- ⬜ **슬라이스 12.7 — Frontend**: "서비스 헬스" 탭, probe overview + incident list.
 
 ## 왜 별도 context인가
 
