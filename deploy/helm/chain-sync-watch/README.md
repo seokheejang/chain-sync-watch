@@ -14,6 +14,18 @@ of the box; disable them to plug in managed services for production.
 
 ## Install
 
+The chart is published as an OCI artifact on GHCR with every tagged
+release — `helm install` can pull it directly:
+
+```bash
+helm install csw oci://ghcr.io/seokheejang/charts/chain-sync-watch \
+  --version 0.1.0 \
+  --namespace chain-sync-watch --create-namespace \
+  --set secrets.CSW_SECRET_KEY="$(openssl rand -base64 32)"
+```
+
+Or install from a checked-out source tree:
+
 ```bash
 # one-time: fetch the postgres + redis subcharts into ./charts/
 helm dependency update ./deploy/helm/chain-sync-watch

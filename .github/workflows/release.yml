@@ -1,0 +1,200 @@
+name: release
+
+# Tag-driven release pipeline.
+#
+# Trigger:    git push of a tag matching v*  (e.g. v0.1.0, v1.2.3-rc.1)
+# Output:     ghcr.io/<owner>/chain-sync-watch:<tag>          (multi-arch)
+#             ghcr.io/<owner>/chain-sync-watch-web:<tag>      (multi-arch)
+#             oci://ghcr.io/<owner>/charts/chain-sync-watch   (Helm OCI)
+#             GitHub Release with the .tgz attached + auto-generated notes.
+#
+# Auth uses GITHUB_TOKEN (no PATs). The workflow_dispatch input lets
+# maintainers re-run the pipeline against an existing tag without
+# pushing a new one.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.1.0). Must already exist.'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # for GitHub Releases
+  packages: write   # for GHCR push
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/chain-sync-watch
+  WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/chain-sync-watch-web
+  HELM_VERSION: v3.16.2
+  CHART_DIR: deploy/helm/chain-sync-watch
+
+jobs:
+  # ------------------------------------------------------------------
+  # Resolve the version once so every downstream job uses an identical
+  # tag. workflow_dispatch supplies the tag explicitly; tag-push uses
+  # GITHUB_REF_NAME. Strip the leading "v" for the chart version (Helm
+  # rejects a leading "v" in semver).
+  resolve:
+    name: resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag '$TAG' is not a valid semver tag (vMAJOR.MINOR.PATCH[-PRERELEASE])." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------
+  # Build + push the Go monorepo image (csw-server / csw-worker / csw CLI).
+  build-backend:
+    name: build backend image
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.resolve.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+          provenance: false
+
+  # ------------------------------------------------------------------
+  # Build + push the Next.js web image. NEXT_PUBLIC_API_BASE_URL is
+  # baked in at build time — leave empty so the bundle uses relative
+  # URLs (an Ingress with /api → server route fronts it).
+  build-web:
+    name: build web image
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.WEB_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.resolve.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.resolve.outputs.tag }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+          provenance: false
+
+  # ------------------------------------------------------------------
+  # Package + publish the Helm chart. Bumps Chart.yaml's version and
+  # appVersion to match the tag so `helm install` from the OCI registry
+  # pulls a chart whose appVersion lines up with the image tag.
+  package-helm:
+    name: package + publish helm chart
+    needs: [resolve, build-backend, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Bump Chart.yaml to ${{ needs.resolve.outputs.version }}
+        run: |
+          sed -i "s/^version:.*/version: ${{ needs.resolve.outputs.version }}/" "${CHART_DIR}/Chart.yaml"
+          sed -i "s/^appVersion:.*/appVersion: \"${{ needs.resolve.outputs.version }}\"/" "${CHART_DIR}/Chart.yaml"
+          grep -E '^(version|appVersion):' "${CHART_DIR}/Chart.yaml"
+
+      - name: helm dependency update
+        run: helm dependency update "${CHART_DIR}"
+
+      - name: helm package
+        run: |
+          mkdir -p /tmp/charts
+          helm package "${CHART_DIR}" -d /tmp/charts
+          ls -la /tmp/charts/
+
+      - name: Login to GHCR (Helm OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ${{ env.REGISTRY }} \
+                -u ${{ github.actor }} --password-stdin
+
+      - name: helm push to OCI registry
+        run: |
+          # Owner is lowercased — GHCR rejects mixed-case namespaces.
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push /tmp/charts/chain-sync-watch-*.tgz \
+            "oci://${{ env.REGISTRY }}/${OWNER}/charts"
+
+      - name: Attach chart to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          files: /tmp/charts/chain-sync-watch-*.tgz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

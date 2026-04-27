@@ -1,0 +1,104 @@
+name: helm
+
+# Static validation for the Helm chart. Runs on every PR/push that
+# touches deploy/helm/** so a broken template never reaches main.
+#
+# Three layers, each catching different bugs:
+#   1. helm lint            — chart-level: missing fields, bad templates
+#   2. helm template        — render-time: Go template syntax, value lookups
+#   3. kubeconform          — K8s API conformance: schema, enums, deprecated APIs
+#
+# Each environment overlay (dev / staging / prod) is rendered separately
+# because they exercise different toggles (HPA, Ingress, ExternalSecret, …).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/helm/**'
+      - '.github/workflows/helm.yml'
+  pull_request:
+    paths:
+      - 'deploy/helm/**'
+      - '.github/workflows/helm.yml'
+
+permissions:
+  contents: read
+
+env:
+  HELM_VERSION: v3.16.2
+  KUBECONFORM_VERSION: v0.6.7
+  # Pin to the chart's `kubeVersion` floor — anything older may emit
+  # APIs the chart no longer accepts.
+  KUBE_VERSION: "1.28.0"
+  CHART_DIR: deploy/helm/chain-sync-watch
+
+jobs:
+  validate:
+    name: lint + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: helm dependency update
+        run: helm dependency update "${CHART_DIR}"
+
+      - name: helm lint (default values)
+        run: |
+          helm lint "${CHART_DIR}" \
+            --set secrets.CSW_SECRET_KEY=ci-dummy
+
+      - name: helm lint + kubeconform (per environment)
+        run: |
+          set -euo pipefail
+          # Datree's CRDs-catalog supplies schemas for things like
+          # monitoring.coreos.com/ServiceMonitor and external-secrets.io/ExternalSecret
+          # that aren't part of upstream Kubernetes.
+          CRDS_SCHEMA='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+          for env in dev staging prod; do
+            echo "::group::$env — helm lint"
+            helm lint "${CHART_DIR}" \
+              -f "${CHART_DIR}/environments/values.${env}.yaml" \
+              --set secrets.CSW_SECRET_KEY=ci-dummy
+            echo "::endgroup::"
+
+            echo "::group::$env — kubeconform"
+            helm template csw "${CHART_DIR}" \
+              -f "${CHART_DIR}/environments/values.${env}.yaml" \
+              --set secrets.CSW_SECRET_KEY=ci-dummy \
+            | kubeconform -strict -summary \
+                -kubernetes-version "${KUBE_VERSION}" \
+                -schema-location default \
+                -schema-location "${CRDS_SCHEMA}" \
+                -ignore-missing-schemas
+            echo "::endgroup::"
+          done
+
+      - name: helm template (full feature set)
+        run: |
+          # Sanity-check rendering with every optional toggle on — same
+          # surface the local smoke test exercises.
+          helm template csw "${CHART_DIR}" \
+            --set secrets.CSW_SECRET_KEY=ci-dummy \
+            --set server.autoscaling.enabled=true \
+            --set worker.autoscaling.enabled=true \
+            --set web.autoscaling.enabled=true \
+            --set server.pdb.enabled=true \
+            --set worker.pdb.enabled=true \
+            --set web.pdb.enabled=true \
+            --set ingress.enabled=true \
+            --set ingress.host=csw.example.com \
+            --set ingress.className=nginx \
+            --set metrics.serviceMonitor.enabled=true \
+          | wc -l
