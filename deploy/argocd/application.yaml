@@ -1,0 +1,75 @@
+# ArgoCD Application — single-environment GitOps for chain-sync-watch.
+#
+# Pick one of the two source patterns below and delete the other:
+#
+#   1. git source  — best for editing values overlays in PRs. ArgoCD
+#      polls the git repo and re-renders the chart on every commit.
+#   2. OCI source  — best for production. Pin a chart version that the
+#      release pipeline (.github/workflows/release.yml) published, so
+#      `helm upgrade` rolls back to a known-good artifact.
+#
+# Apply with:
+#   kubectl apply -n argocd -f deploy/argocd/application.yaml
+#
+# The ArgoCD installation must already exist in the cluster (typically
+# in the `argocd` namespace) and have permissions to write into the
+# destination namespace.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chain-sync-watch
+  namespace: argocd
+  # finalizers ensures `kubectl delete application` cleans up the
+  # workload too, instead of leaving orphaned Deployments behind.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  # ---- Option 1: git source (uncomment to use) ----------------------
+  source:
+    repoURL: https://github.com/seokheejang/chain-sync-watch.git
+    targetRevision: main
+    path: deploy/helm/chain-sync-watch
+    helm:
+      valueFiles:
+        # In-chart overlay. Switch to values.prod.yaml for production.
+        - environments/values.staging.yaml
+      # Override individual keys without committing them. Real secrets
+      # should flow through ExternalSecrets — see environments/values.prod.yaml.
+      parameters: []
+
+  # ---- Option 2: OCI source (delete the git block above to use) -----
+  # source:
+  #   repoURL: ghcr.io/seokheejang/charts
+  #   chart: chain-sync-watch
+  #   targetRevision: 0.1.0
+  #   helm:
+  #     valueFiles:
+  #       - environments/values.prod.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chain-sync-watch
+
+  syncPolicy:
+    automated:
+      # Removes resources that no longer exist in the chart render.
+      prune: true
+      # Reverts manual `kubectl edit` drift back to the chart spec.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Bitnami subcharts emit large CRDs / config that exceed the
+      # 256KB last-applied-configuration annotation limit on apply.
+      - ServerSideApply=true
+      # Helm hooks (migrate Job) need this so ArgoCD treats them as
+      # part of the sync wave instead of orphaning them.
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

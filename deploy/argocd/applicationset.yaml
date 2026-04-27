@@ -1,0 +1,62 @@
+# ArgoCD ApplicationSet — fans out one Application per environment
+# from a single manifest. Useful when dev / staging / prod run in the
+# same ArgoCD instance and should diverge only by their values overlay.
+#
+# Apply with:
+#   kubectl apply -n argocd -f deploy/argocd/applicationset.yaml
+#
+# Each generated Application is named csw-<env> and deploys into a
+# namespace named chain-sync-watch-<env>. Adjust the list generator
+# below to match your cluster's environment topology.
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: chain-sync-watch
+  namespace: argocd
+spec:
+  # When the generator no longer emits an entry, ArgoCD deletes the
+  # corresponding Application along with its workload.
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+
+  generators:
+    - list:
+        elements:
+          - env: dev
+            namespace: chain-sync-watch-dev
+          - env: staging
+            namespace: chain-sync-watch-staging
+          - env: prod
+            namespace: chain-sync-watch-prod
+
+  template:
+    metadata:
+      name: csw-{{env}}
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/seokheejang/chain-sync-watch.git
+        targetRevision: main
+        path: deploy/helm/chain-sync-watch
+        helm:
+          valueFiles:
+            - environments/values.{{env}}.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 5m

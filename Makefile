@@ -182,6 +182,36 @@ logs: ## Tail docker compose logs
 ps: ## List docker compose services
 	$(COMPOSE) ps
 
+# -------------------- Helm / kind --------------------
+
+KIND_CLUSTER ?= csw-smoke
+
+.PHONY: helm-deps
+helm-deps: ## helm dependency update for the bundled chart
+	helm dependency update deploy/helm/chain-sync-watch
+
+.PHONY: helm-lint
+helm-lint: helm-deps ## helm lint with each environment overlay
+	@for env in dev staging prod; do \
+		echo "=== $$env ==="; \
+		helm lint deploy/helm/chain-sync-watch \
+			-f deploy/helm/chain-sync-watch/environments/values.$$env.yaml \
+			--set secrets.CSW_SECRET_KEY=ci-dummy || exit 1; \
+	done
+
+.PHONY: helm-template
+helm-template: helm-deps ## helm template the prod overlay (read-only render)
+	helm template csw deploy/helm/chain-sync-watch \
+		-f deploy/helm/chain-sync-watch/environments/values.prod.yaml
+
+.PHONY: kind-smoke
+kind-smoke: ## Spin up kind, install chart, hit /healthz (full smoke test)
+	deploy/scripts/kind-smoke.sh
+
+.PHONY: kind-smoke-down
+kind-smoke-down: ## Tear down the kind smoke cluster
+	kind delete cluster --name $(KIND_CLUSTER)
+
 # -------------------- Private indexer tunnel --------------------
 # The proxy bridges localhost:19999 to an internal indexer reachable
 # only via VPN. Script + hard-coded target IP live under private/
